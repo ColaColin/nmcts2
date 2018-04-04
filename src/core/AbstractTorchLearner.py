@@ -26,7 +26,7 @@ class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
         self.netInIsCached = False
         self.netInCache = None
     
-    def framesBufferSize(self):
+    def getFramesBufferSize(self):
         return self.framesBufferSize
     
     @abc.abstractmethod
@@ -51,6 +51,8 @@ class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
         """
         return the learning rate to be used for the given iteration
         """
+        if iteration >= len(self.lr_schedule):
+            iteration = len(self.lr_schedule) - 1
         return self.lr_schedule[iteration]
     
     def getBatchSize(self):

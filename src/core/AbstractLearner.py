@@ -48,7 +48,7 @@ class AbstractLearner(metaclass=abc.ABCMeta):
         """
     
     @abc.abstractmethod
-    def getFramesPerIteration(self):
+    def getFramesBufferSize(self):
         """
-        returns the maximum number of frames learned from per iteration
+        returns the maximum number of frames remembered to learn from
         """

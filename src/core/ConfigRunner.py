@@ -4,10 +4,9 @@ Created on Apr 3, 2018
 @author: cclausen
 '''
 
-import json
+
 import multiprocessing as mp
 import importlib
-import sys
 import os
 
 import torch.optim as optim
@@ -16,6 +15,8 @@ from core.AbstractTorchLearner import AbstractTorchLearner
 from core.NeuralMctsTrainer import NeuralMctsTrainer
 from core.NeuralMctsPlayer import NeuralMctsPlayer
 
+from core.misc import openJson
+
 from nets.Nets import ResCNN
 
 def object_for_class_name(module_name):
@@ -23,11 +24,6 @@ def object_for_class_name(module_name):
     m = importlib.import_module(module_name)
     c = getattr(m, class_name)
     return c()
-
-def openJson(path):
-    with open(path) as f:
-        parsed = json.load(f)
-    return parsed
 
 def unrollLearningRates(lrs):
     result = []
@@ -40,8 +36,14 @@ def unrollLearningRates(lrs):
 
 class ConfigLearner(AbstractTorchLearner):
     def __init__(self, config, gameInit):
+        lconf = config["learning"]
+        super(ConfigLearner, self).__init__(lconf["framesBufferSize"], 
+                                            lconf["batchSize"],
+                                            lconf["epochs"],
+                                            unrollLearningRates(lconf["learningRates"]))
         self.config = config
         self.gameInit = gameInit
+        self.initState(None)
         
     def clone(self):
         c = ConfigLearner(self.config, self.gameInit)
@@ -51,6 +53,10 @@ class ConfigLearner(AbstractTorchLearner):
             c.net.load_state_dict(self.net.state_dict())
             
         return c
+    
+    def getNetInputShape(self):
+        dims = self.gameInit.getGameDimensions()
+        return (dims[2], dims[0], dims[1])
     
     def getPlayerCount(self):
         return self.gameInit.getPlayerCount()
@@ -63,7 +69,7 @@ class ConfigLearner(AbstractTorchLearner):
         if (netc["type"] == "ResNet"):
             dims = self.gameInit.getGameDimensions()
             return ResCNN(dims[0], dims[1], dims[2], 
-                          netc["fiirstBlockKernelSize"], netc["firstBlockFeatures"], 
+                          netc["firstBlockKernelSize"], netc["firstBlockFeatures"], 
                           netc["blockFeatures"], netc["blocks"], self.getMoveCount(), 
                           self.getPlayerCount())
         else:
@@ -79,7 +85,10 @@ class ConfigLearner(AbstractTorchLearner):
 if __name__ == '__main__':
     mp.set_start_method("spawn")
     
-    workdir = sys.argv[1]
+    #workdir = sys.argv[1]
+    
+    workdir = "/MegaKeks/nmcts2/mnk333_A"
+    
     datadir = os.path.join(workdir, "data")
     
     if not os.path.exists(datadir):
@@ -93,10 +102,12 @@ if __name__ == '__main__':
     
     learner = ConfigLearner(config, initObject)
     player = NeuralMctsPlayer(initObject.getStateTemplate(), config["learning"]["mctsExpansions"], learner)
-    trainer = NeuralMctsTrainer(player, datadir, championGames = config["learning"]["testGames"],
-                                batchSize = config["learning"]["batchSize"],
-                                threads=config["learning"]["threads"])
+    lconf = config["learning"]
+    trainer = NeuralMctsTrainer(player, datadir, lconf["framesPerIteration"], championGames = lconf["testGames"],
+                                useTreeFrameGeneration = lconf["useTreeFrameGeneration"],
+                                batchSize = lconf["batchSize"],
+                                threads=lconf["threads"],
+                                benchmarkTime=lconf["testInterval"])
     
     trainer.iterateLearning()
-    
     

@@ -15,19 +15,27 @@ import random
 import os
 import pickle
 
+from core.misc import openJson, writeJson
+
 class NeuralMctsTrainer():
     
-    def __init__(self, nplayer, epochRuns, workingdir, championGames=500, batchSize=200, threads=5):
-        self.bestPlayer = nplayer.clone()
+    def __init__(self, nplayer, workingdir, framesPerIteration, useTreeFrameGeneration = False, championGames=500, batchSize=200, threads=5, benchmarkTime = 3600):
         self.learner = nplayer
+        
+        self.bestIteration = 0
+        
+        self.useTreeFrameGeneration = useTreeFrameGeneration
+        
+        self.framesPerIteration = framesPerIteration
+        
         self.lastBenchmarkTime = time.time()
-        self.epochRuns = epochRuns
         self.workingdir = workingdir
         self.pool = mp.Pool(processes=threads)
         self.threads = threads
         self.batchSize = batchSize
         self.frameHistory = []
         self.championGames = championGames
+        self.benchmarkTime = benchmarkTime
         
         gamesPerProc = int(self.championGames / self.threads)
         assert gamesPerProc % 2 == 0, "championgames / threads / 2 needs to be even!"
@@ -42,7 +50,10 @@ class NeuralMctsTrainer():
     # assert N % 2 == 0 #because I don't want to think about the more general case...
     # setup N/2 players playing as the learner, N/2 as bestPlayer
     # sum up all wins of the learner instances and all wins of the bestPlayer instances
-    def learnerIsNewChampion(self):
+    def doBenchmark(self):
+        self.bestPlayer = self.learner.clone();
+        self.bestPlayer.learner.initState(os.path.join(self.workingdir, "learner.iter" + str(self.bestIteration)))
+        
         gamesPerProc = int(self.championGames / self.threads)
 
         playersN = self.learner.stateTemplate.getPlayerCount()
@@ -118,7 +129,7 @@ class NeuralMctsTrainer():
         t = time.time()
         t0 = t
         
-        maxFrames = int(self.learner.learner.getFramesPerIteration() / 10)
+        maxFrames = self.framesPerIteration
         
         framesPerProc = int(maxFrames / self.threads)
         
@@ -127,9 +138,12 @@ class NeuralMctsTrainer():
         asyncs = []
         
         for _ in range(self.threads):
-#             g = gamesPerProc
-#             asyncs.append(self.pool.apply_async(self.bestPlayer.selfPlayNGames, args=(g, self.batchSize, keepFramesPerc)))
-            asyncs.append(self.pool.apply_async(self.bestPlayer.selfPlayGamesAsTree, args=(framesPerProc, self.batchSize)))
+            if self.useTreeFrameGeneration:
+                asyncs.append(self.pool.apply_async(self.learner.selfPlayGamesAsTree, args=(framesPerProc, self.batchSize)))
+            else:
+                assert False # TODO fix the function below to work with framesPerProc
+                asyncs.append(self.pool.apply_async(self.learner.selfPlayNGames, args=(self.batchSize, keepFramesPerc)))
+            
         
         cframes = 0
         ignoreFrames = 0
@@ -140,7 +154,6 @@ class NeuralMctsTrainer():
                 cframes += 1
                 if cframes < maxFrames:
                     learnFrames.append(f)
-                
                 newFrames.append(f)
         
         print("Collected %i frames in %f" % (cframes, (time.time() - t)))
@@ -152,7 +165,7 @@ class NeuralMctsTrainer():
         random.shuffle(self.frameHistory)
         
         for historicFrame in self.frameHistory:
-            if len(learnFrames) < self.learner.learner.getFramesPerIteration():
+            if len(learnFrames) < self.learner.learner.getFramesBufferSize():
                 learnFrames.append(historicFrame)
             else:
                 break
@@ -160,83 +173,78 @@ class NeuralMctsTrainer():
         for f in newFrames:
             self.frameHistory.append(f)
         
-        while len(self.frameHistory) > self.learner.learner.getFramesPerIteration():
+        while len(self.frameHistory) > self.learner.learner.getFramesBufferSize():
             del self.frameHistory[0]
-
-        self.saveFrames(iteration)
         
-        improved = self.learnFrames(learnFrames, iteration)
+        self.learnFrames(learnFrames, iteration)
 
         print("Iteration completed in %f" % (time.time() - t0))
-        
-        return improved
 
     def learnFrames(self, learnFrames, iteration):
         t = time.time()
-        runs = self.epochRuns
-        improved = True
-        while runs > 0:
-            runs -= 1
-            
-            random.shuffle(learnFrames)
-            
-            self.bestPlayer.learner.learnFromFrames(learnFrames, iteration)
-            
-            if time.time() - self.lastBenchmarkTime > 23 * 3600:
-                print("Benchmarking progress...")
-                self.lastBenchmarkTime = time.time()
-                
-                tmpBest = self.bestPlayer
-                self.bestPlayer = self.learner
-                self.learner = tmpBest
-                
-                self.learnerIsNewChampion()
-                
-                self.bestPlayer = tmpBest
-                self.learner = self.bestPlayer.clone()
-                
+        
+        random.shuffle(learnFrames)
+        
+        self.learner.learner.learnFromFrames(learnFrames, iteration)
+        
+        if time.time() - self.lastBenchmarkTime > self.benchmarkTime:
+            print("Benchmarking progress...")
+            if self.doBenchmark():
+                self.bestIteration = iteration
+        
         print("Done learning in %f" % (time.time() - t))
-        return improved
 
-    def loadForIteration(self, iteration):
-        files = os.listdir(self.workingdir)
-        foundBest = False
-        for i in reversed(range(iteration + 1)):
-            bpi = "bestPlayer.iter" + str(i)
-            if bpi in files:
-                p = os.path.join(self.workingdir, bpi)
-                foundBest = True
-                break
-            
-        self.learner.learner.initState(os.path.join(self.workingdir, "learner.iter" + str(iteration)))
-        
-        if foundBest:
-            self.bestPlayer.learner.initState(p)
+    def load(self):
+        spath = os.path.join(self.workingdir, "status.json")
+        if (os.path.exists(spath)):
+            status = openJson(spath)
+            print("Continue training of a player at iteration " + str(status["iteration"]))
         else:
-            self.bestPlayer = self.learner.clone()
+            print("Beginning training of a new player")
+            status = {}
+            status["lastBenchmark"] = 0
+            status["iteration"] = 0
+            status["bestIteration"] = 0
         
-        with open(os.path.join(self.workingdir, "frameHistory" + str(iteration) + ".pickle"), "rb") as f:
-            self.frameHistory = pickle.load(f)
-            print("Loaded %i frames " % len(self.frameHistory))
+        self.bestIteration = status["bestIteration"]
+        self.lastBenchmarkTime = time.time() - status["lastBenchmark"]
+        
+        lPath = os.path.join(self.workingdir, "learner.iter" + str(status["iteration"]))
+        if os.path.exists(lPath):
+            self.learner.learner.initState(lPath)
+        
+        fPath = os.path.join(self.workingdir, "frameHistory"+ str(status["iteration"]) +".pickle")
+        if os.path.exists(fPath):
+            with open(fPath, "rb") as f:
+                self.frameHistory = pickle.load(f)
+                print("Loaded %i frames " % len(self.frameHistory))
+            
+        return status["iteration"]
     
     def saveFrames(self, iteration):
-        with open(os.path.join(self.workingdir, "frameHistory"+ str(iteration) +".pickle"), "wb") as f:
+        fPath = os.path.join(self.workingdir, "frameHistory"+ str(iteration) +".pickle")
+        with open(fPath, "wb") as f:
             pickle.dump(self.frameHistory, f)
             print("Saved %i frames for iteration %i" % (len(self.frameHistory), iteration))
     
-    def saveForIteration(self, iteration, improved):
-        if improved:
-            self.bestPlayer.learner.saveState(os.path.join(self.workingdir, "bestPlayer.iter" + str(iteration)))
+    def saveForIteration(self, iteration):
+        self.saveFrames(iteration)
         self.learner.learner.saveState(os.path.join(self.workingdir, "learner.iter" + str(iteration)))
-                
-    # TODO preload does not store a bestPlayer. Which is not optimal at all...
-    def iterateLearning(self, numIterations, startAtIteration = 0,keepFramesPerc=1.0):
-        loadIteration = startAtIteration - 1
-        if loadIteration > -1:
-            self.loadForIteration(loadIteration)
-            
-        for i in range(startAtIteration, numIterations):
-            print("Begin iteration %i" % i)
-            impr = self.doLearningIteration(i, keepFramesPerc=keepFramesPerc)
-            self.saveForIteration(i, impr)
+        
+        status = {}
+        status["lastBenchmark"] = time.time() - self.lastBenchmarkTime
+        status["iteration"] = iteration
+        status["bestIteration"] = self.bestIteration
+        
+        writeJson(os.path.join(self.workingdir, "status.json"), status)
+    
+    def iterateLearning(self, keepFramesPerc=1.0):
+        i = self.load()
+        
+        while True:
+            print("Begin iteration %i @ %s" % (i, time.ctime()))
+            self.doLearningIteration(i, keepFramesPerc=keepFramesPerc)
+
+            self.saveForIteration(i)
+            i += 1
             
