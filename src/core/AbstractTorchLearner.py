@@ -161,7 +161,7 @@ class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
 #             print(self.moveOutput[fidx], self.winOutput[fidx])
 #             print(self.networkInput[fidx])
     
-    def learnFromFrames(self, frames, iteration, dbg=False):
+    def learnFromFrames(self, frames, iteration, dbg=False, reAugmentEvery=1):
         assert(len(frames) <= self.framesBufferSize), str(len(frames)) + "/" + str(self.framesBufferSize)
 
         batchNum = int(len(frames) / self.batchSize)
@@ -179,18 +179,32 @@ class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
         self.net.train(True)
         
         for e in range(self.epochs):
+            
             print("Preparing example data...")
-            self.fillTrainingSet(frames)
             
-            print("Fill complete!")
-            
-            assert torch.sum(self.networkInput.ne(self.networkInput)) == 0
-            assert torch.sum(self.moveOutput.ne(self.moveOutput)) == 0
-            assert torch.sum(self.winOutput.ne(self.winOutput)) == 0
-            
-            nIn = Variable(self.networkInput).cuda()
-            mT = Variable(self.moveOutput).cuda()
-            wT = Variable(self.winOutput).cuda()
+            if e % reAugmentEvery == 0:
+                print("Filling with augmented data")
+                self.fillTrainingSet(frames)
+                assert torch.sum(self.networkInput.ne(self.networkInput)) == 0
+                assert torch.sum(self.moveOutput.ne(self.moveOutput)) == 0
+                assert torch.sum(self.winOutput.ne(self.winOutput)) == 0
+                
+                lf = len(frames)
+                nIn = Variable(self.networkInput[:lf]).cuda()
+                mT = Variable(self.moveOutput[:lf]).cuda()
+                wT = Variable(self.winOutput[:lf]).cuda()
+            else:
+                print("Shuffle last augmented data...")
+                perm = torch.randperm(len(frames)).cuda()
+                nInR = nIn.index_select(0, perm)
+                mTR = mT.index_select(0, perm)
+                wTR = wT.index_select(0, perm)
+                del nIn
+                del mT
+                del wT
+                nIn = nInR
+                mT = mTR
+                wT = wTR
             
             print("Data prepared, starting to learn!")
             
@@ -209,9 +223,8 @@ class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
                 
                 mO, wO = self.net(x)
                 
-                eps = 1e-6
-                mLoss = -torch.sum(torch.log(mO + eps) * yM) / self.batchSize
-                wLoss = -torch.sum(torch.log(wO + eps) * yW) / self.batchSize
+                mLoss = -torch.sum(mO * yM) / self.batchSize
+                wLoss = -torch.sum(wO * yW) / self.batchSize
                 
                 loss = mLoss + wLoss
                 loss.backward()

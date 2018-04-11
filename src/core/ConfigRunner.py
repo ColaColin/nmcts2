@@ -8,11 +8,12 @@ Created on Apr 3, 2018
 import multiprocessing as mp
 import importlib
 import os
+import time
 
 import torch.optim as optim
 
 from core.AbstractTorchLearner import AbstractTorchLearner
-from core.NeuralMctsTrainer import NeuralMctsTrainer
+from core.NeuralMctsTrainer import NeuralMctsTrainer, PlayerComparator
 from core.NeuralMctsPlayer import NeuralMctsPlayer
 
 from core.misc import openJson
@@ -76,38 +77,105 @@ class ConfigLearner(AbstractTorchLearner):
             assert False, "unsupported network type"
 
     def createOptimizer(self, net):
-        # TOOD make this configurable!!!
-        return optim.SGD(net.parameters(), lr=0.01, momentum=0.9, weight_decay=0.0001, nesterov=True)
+        if self.config["learning"]["useAdam"]:
+            return optim.Adam(net.parameters(), weight_decay = 0.0001)
+        else:
+            return optim.SGD(net.parameters(), lr=0.01, momentum=0.9, weight_decay=0.0001, nesterov=True)
 
     def fillNetworkInput(self, state, tensor, batchIndex):
         self.gameInit.fillNetworkInput(state, tensor, batchIndex)
 
-if __name__ == '__main__':
-    mp.set_start_method("spawn")
-    
-    #workdir = sys.argv[1]
-    
-    workdir = "/MegaKeks/nmcts2/mnk333_A"
-    
-    datadir = os.path.join(workdir, "data")
-    
-    if not os.path.exists(datadir):
-        os.mkdir(datadir)
-    
-    config = openJson(os.path.join(workdir, "config.json"))
-    
-    initObject = object_for_class_name(config["game"]["init"]) 
-    
-    initObject.setConfig(config)
-    
+def ensureExists(d):
+    if not os.path.exists(d):
+        os.mkdir(d)
+
+def pickComparativeConfig(config, key):
+    config["network"] = config[key]["network"]
+    config["learning"] = config[key]["learning"]
+
+def createPlayerFor(config, initObject):
     learner = ConfigLearner(config, initObject)
-    player = NeuralMctsPlayer(initObject.getStateTemplate(), config["learning"]["mctsExpansions"], learner)
+    player = NeuralMctsPlayer(initObject.getStateTemplate(), config, learner)
+    return player
+
+def createTrainerFor(config, player, datadir, pool = None):
     lconf = config["learning"]
     trainer = NeuralMctsTrainer(player, datadir, lconf["framesPerIteration"], championGames = lconf["testGames"],
                                 useTreeFrameGeneration = lconf["useTreeFrameGeneration"],
                                 batchSize = lconf["batchSize"],
                                 threads=lconf["threads"],
-                                benchmarkTime=lconf["testInterval"])
+                                benchmarkTime=lconf["testInterval"],
+                                pool = pool,
+                                reAugmentEvery = lconf["reAugmentEvery"])
+    return trainer
+
+def runSingleTraining(workdir):
+    datadir = os.path.join(workdir, "data")
+    
+    ensureExists(datadir)
+   
+    config = openJson(os.path.join(workdir, "config.json"))
+    
+    initObject = object_for_class_name(config["game"]["init"]) 
+    initObject.setConfig(config)
+    
+    player = createPlayerFor(config, initObject)
+    trainer = createTrainerFor(config, player, datadir)
     
     trainer.iterateLearning()
+
+def runComparativeTraining(workdir):
+    
+    datadirA = os.path.join(workdir, "A")
+    datadirB = os.path.join(workdir, "B")
+    
+    ensureExists(datadirA)
+    ensureExists(datadirB)
+    
+    configA = openJson(os.path.join(workdir, "config.json"))
+    configB = openJson(os.path.join(workdir, "config.json"))
+    config = openJson(os.path.join(workdir, "config.json"))
+
+    pool = mp.Pool(processes=config["compare"]["threads"])
+    
+    pickComparativeConfig(configA, "A")
+    pickComparativeConfig(configB, "B")
+    
+    initA = object_for_class_name(configA["game"]["init"])
+    initA.setConfig(configA)
+    initB = object_for_class_name(configB["game"]["init"])
+    initB.setConfig(configB)
+    
+    playerA = createPlayerFor(configA, initA)
+    playerB = createPlayerFor(configB, initB)
+    
+    trainerA = createTrainerFor(configA, playerA, datadirA, pool = pool)
+    trainerB = createTrainerFor(configB, playerB, datadirB, pool = pool)
+    
+    while True:
+        print("Iterating on player A....")
+        aTime = time.time()
+        trainerA.iterateLearning(iterateForever = False)
+        aTime = time.time() - aTime
+        
+        print("Iterating on player B....")
+        bTime = time.time()
+        trainerB.iterateLearning(iterateForever = False)
+        bTime = time.time() - bTime
+        
+        print("Comparing player A and B")
+        comp = PlayerComparator(config["compare"]["threads"], config["compare"]["testGames"], pool)
+        aWins, bWins, draws, _ = comp.compare(playerA, playerB)
+
+        print("A took %i, B took %i" % (aTime, bTime))
+        print("A:B:Draws is %i : %i : %i" % (aWins, bWins, draws))
+
+if __name__ == '__main__':
+    mp.set_start_method("spawn")
+    
+    workdir = "/MegaKeks/nmcts2/c6_13_compare_5"
+
+    #runSingleTraining(workdir)
+    runComparativeTraining(workdir)
+    
     

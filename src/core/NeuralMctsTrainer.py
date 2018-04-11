@@ -16,49 +16,30 @@ import os
 import pickle
 
 from core.misc import openJson, writeJson
+import multiprocessing
 
-class NeuralMctsTrainer():
-    
-    def __init__(self, nplayer, workingdir, framesPerIteration, useTreeFrameGeneration = False, championGames=500, batchSize=200, threads=5, benchmarkTime = 3600):
-        self.learner = nplayer
-        
-        self.bestIteration = 0
-        
-        self.useTreeFrameGeneration = useTreeFrameGeneration
-        
-        self.framesPerIteration = framesPerIteration
-        
-        self.lastBenchmarkTime = time.time()
-        self.workingdir = workingdir
-        self.pool = mp.Pool(processes=threads)
+# given an N player game:
+# assert N % 2 == 0 #because I don't want to think about the more general case...
+# setup N/2 players playing as the learner, N/2 as bestPlayer
+# sum up all wins of the learner instances and all wins of the bestPlayer instances
+class PlayerComparator():
+    def __init__(self, threads, testGames, pool):
+        self.pool = pool
         self.threads = threads
-        self.batchSize = batchSize
-        self.frameHistory = []
-        self.championGames = championGames
-        self.benchmarkTime = benchmarkTime
+        self.testGames = testGames
         
-        gamesPerProc = int(self.championGames / self.threads)
-        assert gamesPerProc % 2 == 0, "championgames / threads / 2 needs to be even!"
+    def compare(self, playerA, playerB):
+        gamesPerProc = int(self.testGames / self.threads)
         
-        missing = self.championGames % self.threads
+        playersN = playerA.stateTemplate.getPlayerCount()
+        aPlayers = int(playersN / 2)
+        bPlayers = int(playersN / 2)
+        
+        assert gamesPerProc % 2 == 0, "testgames / threads / 2 needs to be even!"
+        
+        missing = self.testGames % self.threads
         assert missing == 0, str(missing) + " != " + 0
-        
-        playersN = self.learner.stateTemplate.getPlayerCount()
         assert playersN % 2 == 0, "an uneven player count would create more issues and need a bit of code improvement in learnerIsNewChampion..."
-    
-    # given an N player game:
-    # assert N % 2 == 0 #because I don't want to think about the more general case...
-    # setup N/2 players playing as the learner, N/2 as bestPlayer
-    # sum up all wins of the learner instances and all wins of the bestPlayer instances
-    def doBenchmark(self):
-        self.bestPlayer = self.learner.clone();
-        self.bestPlayer.learner.initState(os.path.join(self.workingdir, "learner.iter" + str(self.bestIteration)))
-        
-        gamesPerProc = int(self.championGames / self.threads)
-
-        playersN = self.learner.stateTemplate.getPlayerCount()
-        bestPlayers = int(playersN / 2)
-        learners = int(playersN / 2)
         
         dbgFrames = False
         
@@ -66,10 +47,10 @@ class NeuralMctsTrainer():
         asyncsInverted = []
         for _ in range(self.threads):
             g = int(gamesPerProc / 2)
-            asyncs.append(self.pool.apply_async(self.learner.playAgainst, 
-                args=(g, g, [self.learner] * (learners - 1) + [self.bestPlayer] * bestPlayers, dbgFrames)))
-            asyncsInverted.append(self.pool.apply_async(self.bestPlayer.playAgainst, 
-                args=(g, g, [self.bestPlayer] * (bestPlayers - 1) + [self.learner] * learners, dbgFrames)))
+            asyncs.append(self.pool.apply_async(playerA.playAgainst, 
+                args=(g, g, [playerA] * (aPlayers - 1) + [playerB] * bPlayers, dbgFrames)))
+            asyncsInverted.append(self.pool.apply_async(playerB.playAgainst, 
+                args=(g, g, [playerB] * (bPlayers - 1) + [playerA] * aPlayers, dbgFrames)))
         
         sumResults = [0,0,0]
         
@@ -88,7 +69,7 @@ class NeuralMctsTrainer():
             sumResults[2] += r[-1]
             firstWins += r[0]
             for i in range(len(r)-1):
-                if i < learners:
+                if i < aPlayers:
                     sumResults[0] += r[i]
                 else:
                     sumResults[1] += r[i]
@@ -106,18 +87,68 @@ class NeuralMctsTrainer():
             sumResults[2] += r[-1]
             firstWins += r[0]
             for i in range(len(r)-1):
-                if i < bestPlayers:
+                if i < bPlayers:
                     sumResults[1] += r[i]
                 else:
                     sumResults[0] += r[i]
         
-        assert sum(sumResults) == self.championGames
+        assert sum(sumResults) == self.testGames
         
-        myWins = sumResults[0]
-        otherWins = sumResults[1]
+        aWins = sumResults[0]
+        bWins = sumResults[1]
+        draws = sumResults[-1]
+        
+        return aWins, bWins, draws, firstWins
+        
+        
+class NeuralMctsTrainer():
+    
+    def __init__(self, nplayer, workingdir, framesPerIteration, 
+                 pool=None, useTreeFrameGeneration = False, 
+                 championGames=500, batchSize=200, 
+                 threads=5, benchmarkTime = 3600,
+                 reAugmentEvery=1):
+        self.learner = nplayer
+        
+        self.reAugmentEvery = reAugmentEvery
+        
+        self.bestIteration = 0
+        
+        self.useTreeFrameGeneration = useTreeFrameGeneration
+        
+        self.framesPerIteration = framesPerIteration
+        
+        self.lastBenchmarkTime = time.time()
+        self.workingdir = workingdir
+        if pool == None:
+            self.pool = mp.Pool(processes=threads)
+        else:
+            self.pool = pool
+        self.threads = threads
+        self.batchSize = batchSize
+        self.frameHistory = []
+        self.championGames = championGames
+        self.benchmarkTime = benchmarkTime
+        
+        gamesPerProc = int(self.championGames / self.threads)
+        assert gamesPerProc % 2 == 0, "championgames / threads / 2 needs to be even!"
+        
+        missing = self.championGames % self.threads
+        assert missing == 0, str(missing) + " != " + 0
+        
+        playersN = self.learner.stateTemplate.getPlayerCount()
+        assert playersN % 2 == 0, "an uneven player count would create more issues and need a bit of code improvement in learnerIsNewChampion..."
+    
+    def benchmarkShowsProgress(self):
+        self.bestPlayer = self.learner.clone();
+        self.bestPlayer.learner.initState(os.path.join(self.workingdir, "learner.iter" + str(self.bestIteration)))
+        
+        comp = PlayerComparator(self.threads, self.championGames, self.pool)
+        myWins, otherWins, draws, firstWins = comp.compare(self.learner, self.bestPlayer)
+        
         eps = 0.00000001
         print("Learner wins %i, best player wins %i, %i draws, %i first move wins: Winrate of %f" % 
-              (myWins, otherWins, sumResults[-1], firstWins, (myWins + eps) / (myWins + otherWins + eps)))
+              (myWins, otherWins, draws, firstWins, (myWins + eps) / (myWins + otherWins + eps)))
         
         improved = myWins > (myWins + otherWins) * 0.55
         if improved:
@@ -139,11 +170,9 @@ class NeuralMctsTrainer():
         
         for _ in range(self.threads):
             if self.useTreeFrameGeneration:
-                asyncs.append(self.pool.apply_async(self.learner.selfPlayGamesAsTree, args=(framesPerProc, self.batchSize)))
+                asyncs.append(self.pool.apply_async(self.learner.selfPlayGamesAsTree, args=(framesPerProc,)))
             else:
-                assert False # TODO fix the function below to work with framesPerProc
-                asyncs.append(self.pool.apply_async(self.learner.selfPlayNGames, args=(self.batchSize, keepFramesPerc)))
-            
+                asyncs.append(self.pool.apply_async(self.learner.selfPlayNFrames, args=(framesPerProc, self.batchSize, keepFramesPerc)))
         
         cframes = 0
         ignoreFrames = 0
@@ -178,19 +207,25 @@ class NeuralMctsTrainer():
         
         self.learnFrames(learnFrames, iteration)
 
+        didBenchmark = False
+
+        if time.time() - self.lastBenchmarkTime > self.benchmarkTime:
+            print("Benchmarking progress...")
+            if self.benchmarkShowsProgress():
+                self.bestIteration = iteration
+            self.lastBenchmarkTime = time.time()
+            didBenchmark = True
+
         print("Iteration completed in %f" % (time.time() - t0))
+        
+        return didBenchmark
 
     def learnFrames(self, learnFrames, iteration):
         t = time.time()
         
         random.shuffle(learnFrames)
         
-        self.learner.learner.learnFromFrames(learnFrames, iteration)
-        
-        if time.time() - self.lastBenchmarkTime > self.benchmarkTime:
-            print("Benchmarking progress...")
-            if self.doBenchmark():
-                self.bestIteration = iteration
+        self.learner.learner.learnFromFrames(learnFrames, iteration, reAugmentEvery=self.reAugmentEvery)
         
         print("Done learning in %f" % (time.time() - t))
 
@@ -238,13 +273,16 @@ class NeuralMctsTrainer():
         
         writeJson(os.path.join(self.workingdir, "status.json"), status)
     
-    def iterateLearning(self, keepFramesPerc=1.0):
+    def iterateLearning(self, iterateForever = True, keepFramesPerc=1.0):
         i = self.load()
         
         while True:
             print("Begin iteration %i @ %s" % (i, time.ctime()))
-            self.doLearningIteration(i, keepFramesPerc=keepFramesPerc)
+            didBenchmark = self.doLearningIteration(i, keepFramesPerc=keepFramesPerc)
 
             self.saveForIteration(i)
             i += 1
+            
+            if didBenchmark and (not iterateForever):
+                break
             

@@ -1,28 +1,27 @@
 '''
-Created on Apr 3, 2018
+Created on Apr 4, 2018
 
 @author: cclausen
 '''
 
-from mnk.MNKGame import MNK, MNKState
+from connect6.Connect6Game import Connect6State, Connect6
 
 def stateFormat(state):
-    return str(state.mnk)
+    return str(state.c6)
 
-class MNKInit():
+class Connect6Init():
     def __init__(self):
         self.stateFormat = stateFormat
-    
+
     def setConfig(self, config):
         self.config = config
         gconf = self.config["game"]
         self.m = gconf["m"]
         self.n = gconf["n"]
-        self.k = gconf["k"]
-    
+        
     def getStateTemplate(self):
-        return MNKState(MNK(self.m,self.n,self.k))
-    
+        return Connect6State(Connect6(m=self.m, n=self.n))
+
     def getPlayerCount(self):
         return 2
     
@@ -33,24 +32,28 @@ class MNKInit():
         return [self.m, self.n, 1]
     
     def fillNetworkInput(self, state, tensor, batchIndex):
-        for x in range(self.m):
-            for y in range(self.n):
-                b = state.mnk.board[y][x]
+        for y in range(self.n):
+            bline = state.c6.board[y]
+            for x in range(self.m):
+                b = bline[x]
                 if b != -1:
                     b = state.mapPlayerIndexToTurnRel(b)
-                tensor[batchIndex,0,x,y] = b
-    
+                tensor[batchIndex,0,y,x] = b
+
     def mkParseCommand(self):
         m = self.m
         n = self.n
-        k = self.k
         def p(cmd):
             try:
                 ms = cmd.split("-")
+                chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+                cIdx = chars.find(ms[1]);
+                if cIdx != -1:
+                    ms[1] = cIdx + 1
                 x = int(ms[0]) - 1
                 y = int(ms[1]) - 1
-                return MNKState(MNK(m,n,k)).getMoveKey(x,y)
+                return Connect6State(Connect6(m=m,n=n)).getMoveKey(x,y)
             except:
                 return -1
         return p
-    
+        

@@ -27,6 +27,132 @@ import math
 
 import os
 
+class TreeFrameGenerator():
+    
+    def __init__(self, batchSize, poolSize, player):
+        self.runningGames = []
+        self.unfinalizedFrames = []
+        self.roots = 0
+        
+        self.player = player
+        self.targetGamesCount = poolSize
+        self.batchSize = batchSize
+        
+    def mcts(self):
+        # do mcts searches for all current states            
+        batchCount = math.ceil(len(self.runningGames) / self.batchSize)
+        for idx in range(batchCount):
+            startIdx = idx * self.batchSize
+            endIdx = (idx+1) * self.batchSize
+            batch = self.runningGames[startIdx:min(endIdx, len(self.runningGames)+1)]
+            self.player.batchMcts(batch)
+            
+        
+    def generateNextN(self, n):
+        finalizedFrames = []
+        lastLog = 5
+
+        while len(finalizedFrames) < n:
+            
+            if lastLog <= len(finalizedFrames):
+                print("[Process#%i] Collected %i / %i, running %i games with %i roots" % (os.getpid(), len(finalizedFrames), n, len(self.runningGames), self.roots))
+                lastLog += 50
+            
+            currentGameCount = len(self.runningGames)
+            targetGamesCount = self.targetGamesCount
+            
+            if currentGameCount == 0 or (targetGamesCount > currentGameCount and currentGameCount % 10 == 0):
+                self.runningGames.append(TreeNode(self.player.stateTemplate.getNewGame()))
+                self.unfinalizedFrames.append(None)
+                currentGameCount += 1
+            
+            newRunningGames = []
+            newUnfinalFrames = []
+            
+            self.mcts()
+            
+            if (targetGamesCount > currentGameCount):
+                splits = min(2, targetGamesCount - currentGameCount)
+                splitIdx = random.randint(0, currentGameCount)
+                splitIdxs = []
+                for i in range(splits):
+                    offset = 0
+                    for offset in range(currentGameCount + 1):
+                        nextIdx = (splitIdx + i + offset) % currentGameCount
+                        if offset >= currentGameCount or (self.unfinalizedFrames[nextIdx] != None and self.unfinalizedFrames[nextIdx][6] > 3 and self.unfinalizedFrames[nextIdx][5] < 2):
+                            splitIdxs.append(nextIdx)
+                            break
+
+            for gidx in range(currentGameCount):
+                g = self.runningGames[gidx]
+                md = g.getMoveDistribution()
+
+                splitExtra = 0
+                for sIdx in splitIdxs:
+                    if gidx == sIdx:
+                        splitExtra += 1
+                
+                mvs = self.player._pickMoves(1 + splitExtra, md, g.state, g.state.isEarlyGame())
+                
+                parentStateFrame = self.unfinalizedFrames[gidx]
+
+                ancestor = parentStateFrame
+                while ancestor != None:
+                    ancestor[5] += len(mvs) - 1
+                    ancestor = ancestor[4]
+                
+                if g.state.getTurn() > 0:
+                    isSplitting = len(mvs) > 1
+                    turnsSinceSplit = 0
+                    
+                    if not isSplitting and parentStateFrame != None:
+                        turnsSinceSplit = parentStateFrame[6] + 1
+                    
+                    stateFrame = [g.state.getFrameClone(),
+                                  md,
+                                  g.getBestValue(),
+                                  np.array([0.0] * g.state.getPlayerCount()),
+                                  parentStateFrame,
+                                  len(mvs),
+                                  turnsSinceSplit]
+                else:
+                    stateFrame = None
+                
+                for mv in mvs:
+                    nextState = g.getChildForMove(mv)
+                    
+                    if nextState.state.getTurn() == 1:
+                        self.roots += 1
+                    
+                    if not nextState.state.isTerminal():
+                        newRunningGames.append(nextState)
+                        newUnfinalFrames.append(stateFrame)
+                    else:
+                        stateResult = np.array(nextState.getTerminalResult())
+                        
+                        ancestor = stateFrame
+                        depth = 0
+                        while ancestor != None:
+                            ancestor[3] += stateResult
+                            depth += 1
+                            if np.sum(ancestor[3]) > ancestor[5] - 0.5:
+                                eps = 0.000000001
+                                ancestor[3] = (ancestor[3]) / (np.sum(ancestor[3]) + eps)
+                                if depth <= nextState.state.getPlayerCount() or ancestor[5] > 1:
+                                    finalizedFrames.append(ancestor[:4])
+
+                                if ancestor[4] == None:
+                                    self.roots -= 1
+                                    assert self.roots > -1
+                            ancestor = ancestor[4]
+                            
+            
+            self.runningGames = newRunningGames
+            self.unfinalizedFrames = newUnfinalFrames
+        
+        return finalizedFrames
+
+
 def getBestNArgs(n, array):
     if len(array) < n:
         return np.arange(0, len(array))
@@ -48,14 +174,16 @@ def getBestNArgs(n, array):
     return result
 
 class NeuralMctsPlayer():
-    def __init__(self, stateTemplate, mctsExpansions, learner):
+    def __init__(self, stateTemplate, config, learner):
+        self.config = config
         self.stateTemplate = stateTemplate.clone()
-        self.mctsExpansions = mctsExpansions # a value of 1 here will make it basically play by the network probabilities in a greedy way #TODO test that
+        self.mctsExpansions = config["learning"]["mctsExpansions"] # a value of 1 here will make it basically play by the network probabilities in a greedy way #TODO test that
         self.learner = learner
         self.cpuct = 0.5424242 #hmm TODO: investigate the influence of this factor on the speed of learning
+        self.treeFrameGenerator = TreeFrameGenerator(config["learning"]["batchSize"], config["learning"]["treePoolSize"], self)
 
     def clone(self):
-        return NeuralMctsPlayer(self.stateTemplate, self.mctsExpansions, 
+        return NeuralMctsPlayer(self.stateTemplate, self.config, 
                                 self.learner.clone())
 
     def _selectDown(self, node):
@@ -194,163 +322,24 @@ class NeuralMctsPlayer():
         
         # TODO verify this works, then use this on a small test problem to gauge the effect on .. everything
         # Result 1: it does work. On 19x19 connect6. So much for a small test problem... still need to gauge the effects...
-    def selfPlayGamesAsTree(self, collectFrameCount, batchSize, splitsCount=5): #todo. Should be able to set this from somewhere...
+    def selfPlayGamesAsTree(self, collectFrameCount):
+        return self.treeFrameGenerator.generateNextN(collectFrameCount)
+        
+    def selfPlayNFrames(self, n, batchSize, keepFramesPerc):
         """
-        collect frames from games played out in the form of a tree. Results are backpropagated, yielding better estimates about the value of a state
+        plays games until n frames are collected against itself using more extensive exploration (i.e. pick move probabilistic if state reports early game)
+        used to generate games for playing.
         """
-        
-        pid = os.getpid()
-        
-        runningGames = []
-        unfinalizedFrames = []
-        finalizedFrames = []
-        
-        roots = 0
-        
-        lastLog = 5
-        
-        rounds = 0
-        
-        # collect frames from game trees
-        while len(finalizedFrames) < collectFrameCount:
-            rounds += 1
-            if lastLog <= len(finalizedFrames):
-                print("[Process#%i] Collected %i / %i, running %i games with %i roots" % (pid, len(finalizedFrames), collectFrameCount, len(runningGames), roots))
-                lastLog += 500
-            
-            currentGameCount = len(runningGames)
-            
-            if currentGameCount == 0 or currentGameCount == int(batchSize/2) or (currentGameCount < batchSize and random.random() > 0.7025742):
-#                 print("[Process#%i] New Game!!" % (pid))
-                runningGames.append(TreeNode(self.stateTemplate.getNewGame()))
-                unfinalizedFrames.append(None)
-            
-            currentGameCount = len(runningGames)
-            
-            newRunningGames = []
-            newUnfinalFrames = []
-
-            # do mcts searches for all current states            
-            batchCount = math.ceil(currentGameCount / batchSize)
-            for idx in range(batchCount):
-                startIdx = idx * batchSize
-                endIdx = (idx+1) * batchSize
-                batch = runningGames[startIdx:endIdx]
-                self.batchMcts(batch)
-            
-            eSplitAdd = 0 #max(0, batchSize - currentGameCount)
-            
-            if batchSize > currentGameCount:
-                eSplitAdd = 2
-                if rounds > batchSize/1.5 and batchSize / 1.5 > currentGameCount:
-                    eSplitAdd += 3
-            else:
-                eSplitAdd = -1
-            
-            # find the indices of games to be split in this iteration
-            splitIdx = random.randint(0, currentGameCount)
-            splitIdxs = []
-            for i in range(splitsCount + eSplitAdd):
-                offset = 0
-                for offset in range(currentGameCount + 1):
-                    nextIdx = (splitIdx + i + offset) % currentGameCount
-                    if offset >= currentGameCount or (unfinalizedFrames[nextIdx] != None and unfinalizedFrames[nextIdx][6] > 3 and unfinalizedFrames[nextIdx][5] < 2):
-                        splitIdxs.append(nextIdx)
-                        break
-
-            # iterate all current states
-            for gidx in range(currentGameCount):
-                g = runningGames[gidx]
-                md = g.getMoveDistribution()
-
-                assert np.sum(md) > 0
-                
-                splitExtra = 0
-                for sIdx in splitIdxs:
-                    if gidx == sIdx:
-                        splitExtra += 1
-                
-                mvs = self._pickMoves(1 + splitExtra, md, g.state, g.state.isEarlyGame())
-                
-                parentStateFrame = unfinalizedFrames[gidx]
-
-                ancestor = parentStateFrame
-                while ancestor != None:
-                    ancestor[5] += len(mvs) - 1
-                    ancestor = ancestor[4]
-                
-                if g.state.getTurn() > 0:
-                    isSplitting = len(mvs) > 1
-                    turnsSinceSplit = 0
-                    
-                    if not isSplitting and parentStateFrame != None:
-                        turnsSinceSplit = parentStateFrame[6] + 1
-                    
-                    stateFrame = [g.state.getFrameClone(),
-                                  md,
-                                  g.getBestValue(),
-                                  np.array([0.0] * g.state.getPlayerCount()),
-                                  parentStateFrame,
-                                  len(mvs),
-                                  turnsSinceSplit]
-                else:
-                    stateFrame = None
-                
-                for mv in mvs:
-                    nextState = g.getChildForMove(mv)
-                    
-                    if nextState.state.getTurn() == 1:
-                        roots += 1
-                    
-                    if not nextState.state.isTerminal():
-                        newRunningGames.append(nextState)
-                        newUnfinalFrames.append(stateFrame)
-                    else:
-                        stateResult = np.array(nextState.getTerminalResult())
-                        
-                        ancestor = stateFrame
-                        depth = 0
-                        while ancestor != None:
-                            ancestor[3] += stateResult
-                            depth += 1
-                            if np.sum(ancestor[3]) > ancestor[5] - 0.5:
-                                eps = 0.000000001
-                                ancestor[3] = (ancestor[3]) / (np.sum(ancestor[3]) + eps)
-                                if depth <= nextState.state.getPlayerCount() or ancestor[5] > 1:
-                                    finalizedFrames.append(ancestor[:4])
-
-                                if ancestor[4] == None:
-                                    roots -= 1
-                                    assert roots > -1
-                            ancestor = ancestor[4]
-                            
-            
-            runningGames = newRunningGames
-            unfinalizedFrames = newUnfinalFrames
-        
-        return finalizedFrames
-        
-    def selfPlayNGames(self, n, batchSize, keepFramesPerc = 1.0):
-        """
-        plays n games against itself using more extensive exploration (i.e. pick move probabilistic if state reports early game)
-        used to generate games for playing
-        """
-        gamesLeft = n
-        gamesRunning = 0
         frames = []
         
         batch = []
         bframes = []
         for _ in range(batchSize):
-            if gamesLeft > gamesRunning:
-                initialGameState = self.stateTemplate.getNewGame()
-                batch.append(TreeNode(initialGameState))
-                gamesRunning += 1
-            else:
-                batch.append(None) # TODO why this hacky stuff with NONE anyway?!
+            initialGameState = self.stateTemplate.getNewGame()
+            batch.append(TreeNode(initialGameState))
             bframes.append([])
         
-        while gamesLeft > 0:
+        while len(frames) < n:
 #             print("Begin batch")
 #             t = time.time()
             self.batchMcts(batch)
@@ -371,18 +360,9 @@ class NeuralMctsPlayer():
                         if keepFramesPerc == 1.0 or random.random() < keepFramesPerc:
                             frames.append(f + [b.getTerminalResult()])
                     bframes[idx] = []
-                    gamesLeft -= 1
-                    gamesRunning -= 1
-                    if gamesRunning < gamesLeft:
-                        batch[idx] = TreeNode(self.stateTemplate.getNewGame())
-                        gamesRunning += 1
-                    else:
-                        batch[idx] = None
+                    batch[idx] = TreeNode(self.stateTemplate.getNewGame())
                 else:
                     batch[idx] = b
-                    
-                if gamesLeft <= 0:
-                    break
                 
         return frames
         

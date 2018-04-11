@@ -34,14 +34,13 @@ class ResBlock(nn.Module):
 class ResCNN(nn.Module):
     def __init__(self, inWidth, inHeight, inDepth, baseKernelSize, baseFeatures, features, blocks, moveSize, winSize):
         super(ResCNN, self).__init__()
-        
         assert (inWidth % 2) == (inHeight % 2)
         
         self.baseConv = nn.Conv2d(inDepth, baseFeatures, baseKernelSize)
         self.baseBn = nn.BatchNorm2d(baseFeatures)
         self.act = nn.ReLU(inplace=True)
         
-        if (baseFeatures != features):
+        if (baseFeatures != features and blocks > 0):
             self.matchConv = nn.Conv2d(baseFeatures, features, 1)
         else:
             self.matchConv = None
@@ -53,8 +52,13 @@ class ResCNN(nn.Module):
 
         hiddens = features * (inWidth - (baseKernelSize - 1)) * (inHeight - (baseKernelSize - 1))
         self.moveHead = nn.Linear(hiddens, moveSize)
-        self.winHead = nn.Linear(hiddens, winSize)
-        self.softmax = nn.Softmax()
+        
+        if winSize > 0:
+            self.winHead = nn.Linear(hiddens, winSize)
+        else:
+            self.winHead = None
+            
+        self.softmax = nn.LogSoftmax()
     
     def forward(self, x):
         x = self.act(self.baseBn(self.baseConv(x)))
@@ -67,9 +71,13 @@ class ResCNN(nn.Module):
         x = x.view(x.size(0), -1)
         
         moveP = self.softmax(self.moveHead(x))
-        winP = self.softmax(self.winHead(x))
-        return moveP, winP
-    
+        
+        if self.winHead != None:
+            winP = self.softmax(self.winHead(x))
+            return moveP, winP
+        else:
+            return moveP
+        
 class MLP(nn.Module):
     def __init__(self, inSize, hiddens, moveSize, winSize):
         super(MLP, self).__init__()
@@ -77,7 +85,7 @@ class MLP(nn.Module):
         self.moveHead = nn.Linear(hiddens, moveSize)
         self.winHead = nn.Linear(hiddens, winSize)
         self.hact = nn.ReLU()
-        self.softmax = nn.Softmax()
+        self.softmax = nn.LogSoftmax()
         
     def forward(self, x):
         x = self.hact(self.h(x))
