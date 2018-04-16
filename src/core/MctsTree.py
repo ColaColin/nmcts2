@@ -6,107 +6,71 @@ Created on Oct 27, 2017
 
 import numpy as np
 
-from core.AbstractState import AbstractState
-
 import random
 
+# internally used data holder
+# represents information about previous tree traversal between parent and child treenode 
+# cython: use a struct
 class TreeEdge():
     def __init__(self, priorP, parentNode):
         self.visitCount = 0
         self.totalValue = 0
-        # TODO have a look at modeling this as a distribution instead of a mean.
-        # see arXiv 1707.06887 as detailed inspiration. How to apply that to MCTS?
-        self.meanValue = 0.5
+        self.meanValue = 0.5 # TODO have a look at modeling this as a distribution instead of a mean, see arXiv 1707.06887 as detailed inspiration. How to apply that to MCTS?
         self.priorP = priorP
         self.parentNode = parentNode
         self.childNode = None
         
+# cython: turn into an extension type
 class TreeNode():
-    # noiseMix of 0.2 has shown better play-strength than no noise at all in mnk 5,5,4 and is therefore assumed to be a good default to use. 
-    #TODO this seems questionable?! Now it's 0.1
     def __init__(self, state, parentEdge=None, noiseMix = 0.1): 
-        assert isinstance(state, AbstractState)
-        self.state = state
         mc = state.getMoveCount()
+
+        # internal mapping of move keys -> TreeNode associated with taking that move,
+        # or None if this move was never tried before 
+        
         self.edges = [None] * mc
+        
+        # internal TreeEdge that points up the tree, used for backup()
         self.parent = parentEdge
-        self.terminalResult = None
-        self.noiseMix = noiseMix
+        
+        # internal used value for numpy dirichlet thingy
         self.dconst = [0.03] * mc
-        self.movePMap = None
-        self.isExpanded = False
-        self.allVisits = 0
         
+        # internal used integer
+        self.allVisits = 0
+
+        # internal boolean flag for pickmove optimization
         self.hasHighs = False
+        # internal list of move keys for pickmove optimization
         self.highs = None
+        
+        # internally used floats for pickmove optimization
         self.lowS = 0
         self.lowQ = 0
+
+        # external use: an abstract state
+        self.state = state
         
-    def getBestValue(self):
-        bv = 0
-        for e in self.edges:
-            if e != None and e.meanValue > bv:
-                bv = e.meanValue
-        return bv
-        
-    def cutTree(self):
-        """
-        deletes all children, reducing the tree to the root
-        resets all counters
-        meant to be used when different solvers are used in an alternating fashion on the same tree.
-        maybe instead a completely different tree should be used for each solver. But meh.
-        Training does reuse the trees, test play doesn't. Better than nothing...
-        """
-        self.edges = [None] * self.state.getMoveCount()
-        self.parent = None
+        # external use: python array of floats that represent the result in case this node is a terminal state
+        # lazy initialized
         self.terminalResult = None
+        
+        # externally provided float
+        self.noiseMix = noiseMix
+        
+        # externally provided 
         self.movePMap = None
+        
+        # externally used boolean flag 
         self.isExpanded = False
-        self.allVisits = 0
         
-        self.hasHighs = False
-        self.highs = None
-        self.lowS = 0
-        self.lowQ = 0
-        
-    def countTreeSize(self):
-        c = 1
-        for e in self.edges:
-            if e != None and e.childNode != None:
-                c += e.childNode.countTreeSize()
-        return c
+    # PRIVATE APIS
     
     def executeMove(self, move):
         assert self.edges[move] != None
         newState = self.state.clone()
         newState.simulate(move)
         return TreeNode(newState, parentEdge=self.edges[move], noiseMix = self.noiseMix)
-    
-    def getChildForMove(self, move):
-        assert self.isExpanded
-        
-        if self.edges[move] == None:
-            self.edges[move] = TreeEdge(self.movePMap[move], self)
-        
-        child = self.edges[move].childNode
-        
-        if child == None:
-            self.edges[move].childNode = self.executeMove(move)
-            child = self.edges[move].childNode 
-        
-        child.parent = None
-        return child
-    
-    def getMoveDistribution(self):
-        sumv = float(self.allVisits)
-        
-        r = [0] * len(self.edges)
-        for m in range(len(r)):
-            e = self.edges[m]
-            if e != None:
-                r[m] = e.visitCount / sumv
-        
-        return r
     
     def getVisitsFactor(self):
         # .0001 means that in the case of a new node with zero visits it will chose whatever has the best P
@@ -139,7 +103,7 @@ class TreeNode():
                 vc = 0.0
                 
             p = (1-self.noiseMix) * p + self.noiseMix * iNoise
-                
+            
             s = cpuct * p / (1.0+vc)
             
             moves.append((move, q, s))
@@ -169,7 +133,6 @@ class TreeNode():
             self.lowS = 0
         
         self.hasHighs = True
-
 
     def pickMoveFromMoveKeys(self, moveKeys, cpuct):
         allVisitsSq = self.getVisitsFactor()
@@ -210,8 +173,68 @@ class TreeNode():
                 
         return moveName, moveValue
     
-    def selectMove(self, cpuct):
+    # END OF PRIVATE APIS
+    
+    def getBestValue(self):
+        """
+    returns a single float that is meant to tell what the best 
+    possible expected outcome is by chosing the best possible actions
+        """
+        bv = 0
+        for e in self.edges:
+            if e != None and e.meanValue > bv:
+                bv = e.meanValue
+        return bv
+        
+    def cutTree(self):
+        """
+        deletes all children, reducing the tree to the root
+        resets all counters
+        meant to be used when different solvers are used in an alternating fashion on the same tree.
+        maybe instead a completely different tree should be used for each solver. But meh.
+        Training does reuse the trees, test play doesn't. Better than nothing...
+        """
+        self.edges = [None] * self.state.getMoveCount()
+        self.parent = None
+        self.terminalResult = None
+        self.movePMap = None
+        self.isExpanded = False
+        self.allVisits = 0
+        
+        self.hasHighs = False
+        self.highs = None
+        self.lowS = 0
+        self.lowQ = 0
+
+    
+    def getChildForMove(self, move):
         assert self.isExpanded
+        
+        if self.edges[move] == None:
+            self.edges[move] = TreeEdge(self.movePMap[move], self)
+        
+        child = self.edges[move].childNode
+        
+        if child == None:
+            self.edges[move].childNode = self.executeMove(move)
+            child = self.edges[move].childNode 
+        
+        child.parent = None
+        return child
+    
+    def getMoveDistribution(self):
+        sumv = float(self.allVisits)
+        
+        r = [0] * len(self.edges)
+        for m in range(len(r)):
+            e = self.edges[m]
+            if e != None:
+                r[m] = e.visitCount / sumv
+        
+        return r
+    
+    def selectMove(self, cpuct):
+        # assert self.isExpanded
         
         if not self.hasHighs:
             self.groupCurrentMoves(cpuct)
@@ -238,9 +261,6 @@ class TreeNode():
             selectedEdge.childNode = self.executeMove(moveName)
         
         return selectedEdge.childNode
-    
-    def needsExpand(self):
-        return not self.isExpanded
 
     def backup(self, vs):
         if self.parent != None:
@@ -251,7 +271,7 @@ class TreeNode():
             self.parent.parentNode.backup(vs)
 
     def getTerminalResult(self):
-        assert self.state.isTerminal()
+        # assert self.state.isTerminal()
         if self.terminalResult == None:
             r = [0] * self.state.getPlayerCount()
             winner = self.state.getWinner()
@@ -265,9 +285,3 @@ class TreeNode():
     def expand(self, movePMap):
         self.movePMap = movePMap
         self.isExpanded = True
-
-    def getPrevState(self):
-        prevState = None
-        if self.parent != None:
-            prevState = self.parent.parentNode.state
-        return prevState

@@ -58,7 +58,7 @@ class ResCNN(nn.Module):
         else:
             self.winHead = None
             
-        self.softmax = nn.LogSoftmax()
+        self.lsoftmax = nn.LogSoftmax()
     
     def forward(self, x):
         x = self.act(self.baseBn(self.baseConv(x)))
@@ -69,11 +69,11 @@ class ResCNN(nn.Module):
         x = self.resBlocks(x)
         
         x = x.view(x.size(0), -1)
-        
-        moveP = self.softmax(self.moveHead(x))
+
+        moveP = self.lsoftmax(self.moveHead(x))
         
         if self.winHead != None:
-            winP = self.softmax(self.winHead(x))
+            winP = self.lsoftmax(self.winHead(x))
             return moveP, winP
         else:
             return moveP
@@ -85,8 +85,8 @@ class MLP(nn.Module):
         self.moveHead = nn.Linear(hiddens, moveSize)
         self.winHead = nn.Linear(hiddens, winSize)
         self.hact = nn.ReLU()
-        self.softmax = nn.LogSoftmax()
+        self.lsoftmax = nn.LogSoftmax()
         
     def forward(self, x):
         x = self.hact(self.h(x))
-        return self.softmax(self.moveHead(x)), self.softmax(self.winHead(x))
+        return self.lsoftmax(self.moveHead(x)), self.lsoftmax(self.winHead(x))

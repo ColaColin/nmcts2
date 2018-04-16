@@ -129,9 +129,6 @@ class Connect6State(AbstractState):
         super(Connect6State, self).__init__()
         self.c6 = c6
         self.legalMoves = None
-        self.networkInputCache = None
-        self.cacheIsValid = False
-        
         
     def canTeachSomething(self):
         return True
@@ -202,8 +199,6 @@ class Connect6State(AbstractState):
         return frame
         
     def simulate(self, move):
-        self.networkInputCache = None
-        self.cacheIsValid = False
         super(Connect6State, self).simulate(move)
         x, y = self.getMoveLocation(move)
         self.c6.place(x, y)

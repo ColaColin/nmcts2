@@ -40,6 +40,7 @@ def printField(m, n, field):
     print(s)
     
 def augmentFieldAndMovesDistribution(m, n, board, moves, moveIdxToPos, movePosToIdx):
+    
     dbg = False
     
     if dbg:

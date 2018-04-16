@@ -21,7 +21,7 @@ from core.MctsTree import TreeNode
 
 import random
 
-#import time
+import time
 
 import math
 
@@ -56,7 +56,7 @@ class TreeFrameGenerator():
             
             if lastLog <= len(finalizedFrames):
                 print("[Process#%i] Collected %i / %i, running %i games with %i roots" % (os.getpid(), len(finalizedFrames), n, len(self.runningGames), self.roots))
-                lastLog += 50
+                lastLog = 1000 + len(finalizedFrames)
             
             currentGameCount = len(self.runningGames)
             targetGamesCount = self.targetGamesCount
@@ -181,13 +181,16 @@ class NeuralMctsPlayer():
         self.learner = learner
         self.cpuct = 0.5424242 #hmm TODO: investigate the influence of this factor on the speed of learning
         self.treeFrameGenerator = TreeFrameGenerator(config["learning"]["batchSize"], config["learning"]["treePoolSize"], self)
+        self.batchMctsCalls = 0
+        self.batchMctsTime = 0
+        self.lastBatchMctsBenchmarkTime = time.time()
 
     def clone(self):
         return NeuralMctsPlayer(self.stateTemplate, self.config, 
                                 self.learner.clone())
 
     def _selectDown(self, node):
-        while not node.needsExpand() and not node.state.isTerminal():
+        while node.isExpanded and not node.state.isTerminal():
             node = node.selectMove(self.cpuct)
         return node
 
@@ -253,7 +256,7 @@ class NeuralMctsPlayer():
         assert self.mctsExpansions > 0
         workspace = states
         
-#         t = time.time()
+        t = time.time()
         
         for _ in range(self.mctsExpansions):
             workspace = [self._selectDown(s) if s != None else None for s in workspace]
@@ -272,7 +275,15 @@ class NeuralMctsPlayer():
                 node.backup(w)
                 workspace[idx] = states[idx]
                 
-#         print(time.time() - t)
+        self.batchMctsTime += (time.time() - t)
+        self.batchMctsCalls += len(states)
+        
+        if self.lastBatchMctsBenchmarkTime < (time.time() - 60 * 3):
+            self.lastBatchMctsBenchmarkTime = time.time()
+            bt= self.batchMctsCalls / self.batchMctsTime
+            self.batchMctsTime = 0
+            self.batchMctsCalls = 0
+            print ("[Process#%i]: %f moves per second " % (os.getpid(), bt))
     
     # todo if one could get the caller to deal with the treenode data it might be possible to not throw away the whole tree that was build, increasing play strength
     def findBestMoves(self, states, noiseMix=0.2):
@@ -323,9 +334,11 @@ class NeuralMctsPlayer():
         # TODO verify this works, then use this on a small test problem to gauge the effect on .. everything
         # Result 1: it does work. On 19x19 connect6. So much for a small test problem... still need to gauge the effects...
     def selfPlayGamesAsTree(self, collectFrameCount):
+        self.lastBatchMctsBenchmarkTime = time.time()
         return self.treeFrameGenerator.generateNextN(collectFrameCount)
         
     def selfPlayNFrames(self, n, batchSize, keepFramesPerc):
+        self.lastBatchMctsBenchmarkTime = time.time()
         """
         plays games until n frames are collected against itself using more extensive exploration (i.e. pick move probabilistic if state reports early game)
         used to generate games for playing.

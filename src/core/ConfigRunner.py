@@ -21,8 +21,8 @@ from core.misc import openJson
 from nets.Nets import ResCNN
 
 def object_for_class_name(module_name):
-    class_name = module_name.split(".")[1]
-    m = importlib.import_module(module_name)
+    class_name = module_name.split(".")[-1]
+    m = importlib.import_module(".".join(module_name.split(".")[:-1]))
     c = getattr(m, class_name)
     return c()
 
@@ -173,9 +173,9 @@ def runComparativeTraining(workdir):
 if __name__ == '__main__':
     mp.set_start_method("spawn")
     
-    workdir = "/MegaKeks/nmcts2/c6_13_compare_5"
+    workdir = "/MegaKeks/nmcts2/c6_13_speed_test"
 
-    #runSingleTraining(workdir)
-    runComparativeTraining(workdir)
+    runSingleTraining(workdir)
+    #runComparativeTraining(workdir)
     
     

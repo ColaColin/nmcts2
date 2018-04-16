@@ -99,6 +99,11 @@ class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
     this has to be able to deal with None values in the batch!
     """
     def evaluate(self, batch):
+        for idx, b in enumerate(batch):
+            if b != None:
+                state = b
+                self.fillNetworkInput(state, self.networkInput , idx)
+
         assert len(batch) <= self.batchSize
         
         if self.netInIsCached:#
@@ -107,16 +112,14 @@ class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
             netIn = Variable(torch.zeros((self.batchSize, ) + self.getNetInputShape())).cuda()
             self.netInCache = netIn
             self.netInIsCached = True
-
-        for idx, b in enumerate(batch):
-            if b != None:
-                state = b
-                self.fillNetworkInput(state, self.networkInput , idx)
         
         #TODO systematically analyze all interaction with gpu memory and apply new findings
         netIn[:len(batch)] = self.networkInput[:len(batch)]
         
         moveP, winP = self.net(netIn)
+        
+        winP = torch.exp(winP)
+        moveP = torch.exp(moveP)
         
         results = []
         for bidx, b in enumerate(batch):
@@ -134,9 +137,8 @@ class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
                 results.append((r, w))
             else:
                 results.append(None) #assumed to never be read. None is a pretty good bet to make everything explode
-            
+
         return results
-    
     
     def fillTrainingSet(self, frames):
         random.shuffle(frames)
