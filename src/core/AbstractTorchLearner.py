@@ -100,7 +100,7 @@ class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
     """
     def evaluate(self, batch):
         for idx, b in enumerate(batch):
-            if b != None:
+            if b is not None:
                 state = b
                 self.fillNetworkInput(state, self.networkInput , idx)
 
@@ -123,7 +123,7 @@ class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
         
         results = []
         for bidx, b in enumerate(batch):
-            if b != None:
+            if b is not None:
                 state = b
                 
                 r = moveP.data[bidx]

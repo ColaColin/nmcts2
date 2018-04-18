@@ -16,7 +16,6 @@ import os
 import pickle
 
 from core.misc import openJson, writeJson
-import multiprocessing
 
 # given an N player game:
 # assert N % 2 == 0 #because I don't want to think about the more general case...
@@ -168,18 +167,32 @@ class NeuralMctsTrainer():
         
         asyncs = []
         
+        # for cProfile
+        useMp = False
+        
         for _ in range(self.threads):
             if self.useTreeFrameGeneration:
-                asyncs.append(self.pool.apply_async(self.learner.selfPlayGamesAsTree, args=(framesPerProc,)))
+                if useMp:
+                    asyncs.append(self.pool.apply_async(self.learner.selfPlayGamesAsTree, args=(framesPerProc,)))
+                else:
+                    asyncs.append(self.learner.selfPlayGamesAsTree(framesPerProc))
             else:
-                asyncs.append(self.pool.apply_async(self.learner.selfPlayNFrames, args=(framesPerProc, self.batchSize, keepFramesPerc)))
+                if useMp:
+                    asyncs.append(self.pool.apply_async(self.learner.selfPlayNFrames, args=(framesPerProc, self.batchSize, keepFramesPerc)))
+                else:
+                    asyncs.append(self.learner.selfPlayNFrames(framesPerProc, self.batchSize, keepFramesPerc))
         
         cframes = 0
         ignoreFrames = 0
         learnFrames = []
         newFrames = []
         for asy in asyncs:
-            for f in asy.get():
+            asyResult = None
+            if useMp:
+                asyResult = asy.get()
+            else:
+                asyResult = asy
+            for f in asyResult:
                 cframes += 1
                 if cframes < maxFrames:
                     learnFrames.append(f)
@@ -254,7 +267,7 @@ class NeuralMctsTrainer():
                 self.frameHistory = pickle.load(f)
                 print("Loaded %i frames " % len(self.frameHistory))
             
-        return status["iteration"]
+        return status["iteration"] + 1
     
     def saveFrames(self, iteration):
         fPath = os.path.join(self.workingdir, "frameHistory"+ str(iteration) +".pickle")

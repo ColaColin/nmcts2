@@ -20,7 +20,7 @@ class TreeEdge():
         self.parentNode = parentNode
         self.childNode = None
         
-# cython: turn into an extension type
+# cython: turn into an extension type shell that adapts the raw c tree search
 class TreeNode():
     def __init__(self, state, parentEdge=None, noiseMix = 0.1): 
         mc = state.getMoveCount()
@@ -48,21 +48,27 @@ class TreeNode():
         self.lowS = 0
         self.lowQ = 0
 
+        # internal move key -> move prob mapping, i.e. an array
+        self.movePMap = None
+        
+        # internal use
+        self.stateValue = 0.5
+
+        # externally provided float, usage only internal
+        self.noiseMix = noiseMix
+
+        # python array of floats that represent the result in case this node is a terminal state
+        # lazy initialized
+        # external access via getter that wants a list
+        self.terminalResult = None
+
         # external use: an abstract state
         self.state = state
         
-        # external use: python array of floats that represent the result in case this node is a terminal state
-        # lazy initialized
-        self.terminalResult = None
-        
-        # externally provided float
-        self.noiseMix = noiseMix
-        
-        # externally provided 
-        self.movePMap = None
-        
         # externally used boolean flag 
         self.isExpanded = False
+        
+        
         
     # PRIVATE APIS
     
@@ -86,6 +92,10 @@ class TreeNode():
         
         dirNoise = np.random.dirichlet(self.dconst[:numLegalMoves])
         
+        # collect for each move:
+        # id, q, s
+        # q and s are the parts of the forumla that determine how future backups will cause the 
+        # probability of a move to change
         for idx in range(numLegalMoves):
             move = lMoves[idx]
             
@@ -98,7 +108,7 @@ class TreeNode():
                 p = e.priorP
                 vc = e.visitCount
             else:
-                q = 0.5
+                q = self.stateValue
                 p = self.movePMap[move]
                 vc = 0.0
                 
@@ -121,9 +131,9 @@ class TreeNode():
         if highLen < minHighs:
             highLen = minHighs
         
-        lows = moves[highLen:]
-        
         self.highs = list(map(lambda x: x[0], moves[:highLen]))
+        
+        lows = moves[highLen:]
         
         if len(lows) > 0:
             self.lowQ = max(map(lambda x: x[1], lows))
@@ -159,13 +169,13 @@ class TreeNode():
                 p = e.priorP
                 vc = e.visitCount
             else:
-                q = 0.5
+                q = self.stateValue
                 p = self.movePMap[idx]
                 vc = 0
             
             p = (1-self.noiseMix) * p + self.noiseMix * iNoise
-
             u = cpuct * p * (allVisitsSq / (1.0 + vc))
+            
             value = q + u
             if (moveName == None or value > moveValue) and self.state.isMoveLegal(idx):
                 moveName = idx
@@ -234,14 +244,12 @@ class TreeNode():
         return r
     
     def selectMove(self, cpuct):
-        # assert self.isExpanded
-        
         if not self.hasHighs:
             self.groupCurrentMoves(cpuct)
-             
+              
         moveName, fastMoveValue = self.pickMoveFromMoveKeys(self.highs, cpuct)
         lowersBestValue = self.lowQ + self.lowS * self.getVisitsFactor()
-        
+         
         if lowersBestValue >= fastMoveValue:
             self.groupCurrentMoves(cpuct)
             moveName, _ = self.pickMoveFromMoveKeys(self.highs, cpuct)
@@ -282,6 +290,34 @@ class TreeNode():
             self.terminalResult = r
         return self.terminalResult
 
-    def expand(self, movePMap):
+    # movePMap is a torch tensor that encodes move probabilities from the network
+    # in a 1d array fashion, move key -> probability
+    # it is our own copy, we don't need to copy it again
+    def expand(self, movePMap, vs):
         self.movePMap = movePMap
         self.isExpanded = True
+        self.stateValue = vs[self.state.getPlayerOnTurnIndex()]
+
+def _selectDown(cpuct, node):
+    while node.isExpanded and not node.state.isTerminal():
+        node = node.selectMove(cpuct)
+    return node
+
+def batchedMcts(states, expansions, evaluator, cpuct):
+    workspace = states
+    for _ in range(expansions):
+        workspace = [_selectDown(cpuct, s) if s != None else None for s in workspace]
+
+        evalout = evaluator(workspace)
+        for idx, ev in enumerate(evalout):
+            node = workspace[idx]
+            if node is None:
+                continue
+            
+            w = ev[1]
+            if node.state.isTerminal():
+                w = node.getTerminalResult()
+            else:
+                node.expand(ev[0], ev[1])
+            node.backup(w)
+            workspace[idx] = states[idx]

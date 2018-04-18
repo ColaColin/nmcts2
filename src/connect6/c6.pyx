@@ -9,6 +9,8 @@ from libc.string cimport memcpy
 
 import random
 
+# todo put the field handling in another pyx file and figure out how to organize compilation
+
 cdef inline float readFloatField(float* f, int m, int x, int y):
     return f[y * m + x];
 
@@ -149,6 +151,7 @@ cdef void augmentFieldAndMovesDistribution(int m, int n, signed char * board,
             writeFloatField(fMovesField, m, x, y, fMove)
         printFloatField(m, n, fMovesField)
     
+    free(fMovesField)
 
 cdef struct Connect6_c:
     int m

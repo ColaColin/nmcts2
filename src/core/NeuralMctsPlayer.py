@@ -17,7 +17,8 @@ Created on Oct 27, 2017
 
 import numpy as np
 
-from core.MctsTree import TreeNode
+#from core.MctsTree import TreeNode, batchedMcts
+from core.cMctsTree import TreeNode, batchedMcts  # @UnresolvedImport
 
 import random
 
@@ -46,7 +47,6 @@ class TreeFrameGenerator():
             endIdx = (idx+1) * self.batchSize
             batch = self.runningGames[startIdx:min(endIdx, len(self.runningGames)+1)]
             self.player.batchMcts(batch)
-            
         
     def generateNextN(self, n):
         finalizedFrames = []
@@ -54,9 +54,9 @@ class TreeFrameGenerator():
 
         while len(finalizedFrames) < n:
             
-            if lastLog <= len(finalizedFrames):
-                print("[Process#%i] Collected %i / %i, running %i games with %i roots" % (os.getpid(), len(finalizedFrames), n, len(self.runningGames), self.roots))
-                lastLog = 1000 + len(finalizedFrames)
+            #if lastLog <= len(finalizedFrames):
+            print("[Process#%i] Collected %i / %i, running %i games with %i roots" % (os.getpid(), len(finalizedFrames), n, len(self.runningGames), self.roots))
+            #    lastLog = 500 + len(finalizedFrames)
             
             currentGameCount = len(self.runningGames)
             targetGamesCount = self.targetGamesCount
@@ -97,7 +97,7 @@ class TreeFrameGenerator():
                 parentStateFrame = self.unfinalizedFrames[gidx]
 
                 ancestor = parentStateFrame
-                while ancestor != None:
+                while ancestor is not None:
                     ancestor[5] += len(mvs) - 1
                     ancestor = ancestor[4]
                 
@@ -105,7 +105,7 @@ class TreeFrameGenerator():
                     isSplitting = len(mvs) > 1
                     turnsSinceSplit = 0
                     
-                    if not isSplitting and parentStateFrame != None:
+                    if not isSplitting and parentStateFrame is not None:
                         turnsSinceSplit = parentStateFrame[6] + 1
                     
                     stateFrame = [g.state.getFrameClone(),
@@ -132,7 +132,7 @@ class TreeFrameGenerator():
                         
                         ancestor = stateFrame
                         depth = 0
-                        while ancestor != None:
+                        while ancestor is not None:
                             ancestor[3] += stateResult
                             depth += 1
                             if np.sum(ancestor[3]) > ancestor[5] - 0.5:
@@ -141,7 +141,7 @@ class TreeFrameGenerator():
                                 if depth <= nextState.state.getPlayerCount() or ancestor[5] > 1:
                                     finalizedFrames.append(ancestor[:4])
 
-                                if ancestor[4] == None:
+                                if ancestor[4] is None:
                                     self.roots -= 1
                                     assert self.roots > -1
                             ancestor = ancestor[4]
@@ -188,11 +188,6 @@ class NeuralMctsPlayer():
     def clone(self):
         return NeuralMctsPlayer(self.stateTemplate, self.config, 
                                 self.learner.clone())
-
-    def _selectDown(self, node):
-        while node.isExpanded and not node.state.isTerminal():
-            node = node.selectMove(self.cpuct)
-        return node
 
     def shuffleTogether(self, a, b):
         combined = list(zip(a, b))
@@ -254,36 +249,21 @@ class NeuralMctsPlayer():
         those TreeNodes will be changed as a result of the call
         """
         assert self.mctsExpansions > 0
-        workspace = states
         
         t = time.time()
         
-        for _ in range(self.mctsExpansions):
-            workspace = [self._selectDown(s) if s != None else None for s in workspace]
-
-            evalout = self.evaluateByLearner(workspace)
-            for idx, ev in enumerate(evalout):
-                node = workspace[idx]
-                if node == None:
-                    continue
-                
-                w = ev[1]
-                if node.state.isTerminal():
-                    w = node.getTerminalResult()
-                else:
-                    node.expand(ev[0])
-                node.backup(w)
-                workspace[idx] = states[idx]
-                
+        batchedMcts(states, self.mctsExpansions, lambda ws: self.evaluateByLearner(ws), self.cpuct)
+        
         self.batchMctsTime += (time.time() - t)
         self.batchMctsCalls += len(states)
         
-        if self.lastBatchMctsBenchmarkTime < (time.time() - 60 * 3):
+        if self.lastBatchMctsBenchmarkTime < (time.time() - 60 * 5):
             self.lastBatchMctsBenchmarkTime = time.time()
             bt= self.batchMctsCalls / self.batchMctsTime
             self.batchMctsTime = 0
             self.batchMctsCalls = 0
             print ("[Process#%i]: %f moves per second " % (os.getpid(), bt))
+            assert False
     
     # todo if one could get the caller to deal with the treenode data it might be possible to not throw away the whole tree that was build, increasing play strength
     def findBestMoves(self, states, noiseMix=0.2):
