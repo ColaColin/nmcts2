@@ -1,3 +1,5 @@
+# cython: profile=False
+
 '''
 Created on Oct 27, 2017
 
@@ -99,13 +101,14 @@ class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
     this has to be able to deal with None values in the batch!
     """
     def evaluate(self, batch):
-        for idx, b in enumerate(batch):
+        cdef int idx, bidx
+        cdef int batchSize = len(batch)
+        for idx in range(batchSize):
+            b = batch[idx]
             if b is not None:
                 state = b
                 self.fillNetworkInput(state, self.networkInput , idx)
 
-        assert len(batch) <= self.batchSize
-        
         if self.netInIsCached:#
             netIn = self.netInCache
         else:
@@ -121,8 +124,12 @@ class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
         winP = torch.exp(winP)
         moveP = torch.exp(moveP)
         
+        cdef int pcount = state.getPlayerCount()
+        cdef int pid
+        
         results = []
-        for bidx, b in enumerate(batch):
+        for bidx in range(batchSize):
+            b = batch[bidx]
             if b is not None:
                 state = b
                 
@@ -131,7 +138,7 @@ class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
                 r = r.cpu()
                 
                 w = []
-                for pid in range(state.getPlayerCount()):
+                for pid in range(pcount):
                     w.append(winP.data[bidx, state.mapPlayerIndexToTurnRel(pid)])
                 
                 results.append((r, w))
@@ -179,6 +186,8 @@ class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
         
         # the model is in non-training mode by default, as set by initState
         self.net.train(True)
+        
+        cdef int e, bi
         
         for e in range(self.epochs):
             

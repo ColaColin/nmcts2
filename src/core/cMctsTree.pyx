@@ -1,4 +1,4 @@
-# cython: profile=True
+# cython: profile=False
 
 from libc.stdlib cimport qsort
 from libc.stdlib cimport malloc, free
