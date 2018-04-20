@@ -23,6 +23,7 @@ class TreeEdge():
 # cython: turn into an extension type shell that adapts the raw c tree search
 class TreeNode():
     def __init__(self, state, parentEdge=None, noiseMix = 0.1): 
+        assert False, "old code, why no cython?"
         mc = state.getMoveCount()
 
         # internal mapping of move keys -> TreeNode associated with taking that move,
@@ -149,7 +150,9 @@ class TreeNode():
         
         numKeys = len(moveKeys)
         assert numKeys > 0
-        dirNoise = np.random.dirichlet(self.dconst[:numKeys])
+        useNoise = self.allVisits < 5 
+        if useNoise:
+            dirNoise = np.random.dirichlet(self.dconst[:numKeys])
         startIdx = random.randint(0, numKeys-1)
         
         moveName = None
@@ -158,7 +161,8 @@ class TreeNode():
         for biasedIdx in range(numKeys):
             idx = (biasedIdx + startIdx) % numKeys
             
-            iNoise = dirNoise[idx]
+            if useNoise:
+                iNoise = dirNoise[idx]
             
             idx = moveKeys[idx]
             
@@ -172,8 +176,9 @@ class TreeNode():
                 q = self.stateValue
                 p = self.movePMap[idx]
                 vc = 0
-            
-            p = (1-self.noiseMix) * p + self.noiseMix * iNoise
+                
+            if useNoise:
+                p = (1-self.noiseMix) * p + self.noiseMix * iNoise
             u = cpuct * p * (allVisitsSq / (1.0 + vc))
             
             value = q + u

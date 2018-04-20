@@ -11,6 +11,8 @@ import math
 
 class Connect6():
     def __init__(self, m=19, n = 19):
+        assert False, "old code not use cython version?"
+        
         self.m = m
         self.n = n
         self.k = 6

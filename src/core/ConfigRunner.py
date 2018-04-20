@@ -173,9 +173,11 @@ def runComparativeTraining(workdir):
 if __name__ == '__main__':
     mp.set_start_method("spawn")
     
-    workdir = "/MegaKeks/nmcts2/c6_13_speed_test"
-
-    runSingleTraining(workdir)
+    #workdir = "/MegaKeks/nmcts2/c6_13_compare_8"
     #runComparativeTraining(workdir)
+
+    workdir = "/MegaKeks/nmcts2/c6_13_speed_test"
+    runSingleTraining(workdir)
+
     
     

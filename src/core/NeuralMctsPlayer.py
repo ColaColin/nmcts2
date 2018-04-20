@@ -28,6 +28,23 @@ import math
 
 import os
 
+def hconc(strs):
+    result = ""
+    
+    if len(strs) == 0:
+        return result
+    
+    strs = [s.split("\n") for s in strs]
+    maxHeight = max([len(s) for s in strs])
+    
+    for i in range(maxHeight):
+        for s in strs:
+            result += s[i]
+            result += " | "
+        result += "\n"
+    
+    return result
+
 class TreeFrameGenerator():
     
     def __init__(self, batchSize, poolSize, player):
@@ -47,16 +64,23 @@ class TreeFrameGenerator():
             endIdx = (idx+1) * self.batchSize
             batch = self.runningGames[startIdx:min(endIdx, len(self.runningGames)+1)]
             self.player.batchMcts(batch)
-        
+    
+    def printRunningGames(self):
+        strs = [str(g.state) for g in self.runningGames]
+        print(hconc(strs))
+        print("+++++++++++++++++++++++++++++++++++++++++++++++")
+    
     def generateNextN(self, n):
         finalizedFrames = []
         lastLog = 5
 
         while len(finalizedFrames) < n:
             
-            #if lastLog <= len(finalizedFrames):
-            print("[Process#%i] Collected %i / %i, running %i games with %i roots" % (os.getpid(), len(finalizedFrames), n, len(self.runningGames), self.roots))
-            #    lastLog = 500 + len(finalizedFrames)
+            self.printRunningGames()
+            
+            if lastLog <= len(finalizedFrames):
+                print("[Process#%i] Collected %i / %i, running %i games with %i roots" % (os.getpid(), len(finalizedFrames), n, len(self.runningGames), self.roots))
+                lastLog = 500 + len(finalizedFrames)
             
             currentGameCount = len(self.runningGames)
             targetGamesCount = self.targetGamesCount
@@ -180,7 +204,8 @@ class NeuralMctsPlayer():
         self.mctsExpansions = config["learning"]["mctsExpansions"] # a value of 1 here will make it basically play by the network probabilities in a greedy way #TODO test that
         self.learner = learner
         self.cpuct = 0.5424242 #hmm TODO: investigate the influence of this factor on the speed of learning
-        self.treeFrameGenerator = TreeFrameGenerator(config["learning"]["batchSize"], config["learning"]["treePoolSize"], self)
+        self.treeFrameGenerator = TreeFrameGenerator(
+            config["learning"]["batchSize"], config["learning"]["treePoolSize"], self)
         self.batchMctsCalls = 0
         self.batchMctsTime = 0
         self.lastBatchMctsBenchmarkTime = time.time()
@@ -262,8 +287,7 @@ class NeuralMctsPlayer():
             bt= self.batchMctsCalls / self.batchMctsTime
             self.batchMctsTime = 0
             self.batchMctsCalls = 0
-            print ("[Process#%i]: %f moves per second " % (os.getpid(), bt))
-            assert False
+            print("[Process#%i]: %f moves per second " % (os.getpid(), bt))
     
     # todo if one could get the caller to deal with the treenode data it might be possible to not throw away the whole tree that was build, increasing play strength
     def findBestMoves(self, states, noiseMix=0.2):

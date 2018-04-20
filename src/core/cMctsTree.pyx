@@ -45,6 +45,7 @@ cdef class TreeNode():
     
     cdef object edges
     cdef TreeEdge parent
+    # how many times an action was chosen on this TreeNode
     cdef int allVisits
     
     cdef int hasHighs
@@ -52,10 +53,7 @@ cdef class TreeNode():
     cdef int* highs
     
     cdef float lowS
-    cdef float lowSQ
-    
     cdef float lowQ
-    cdef float lowQS
 
     cdef float stateValue
     
@@ -86,6 +84,7 @@ cdef class TreeNode():
         self.dconst = np.asarray([0.03] * mc, dtype="float32")
         self.currentGroupSizeFactor = 0.9
         self.noRegroupsNeededCount = 0
+        self.allVisits = 0
     
     def __dealloc__(self):
         if self.highs != NULL:
@@ -173,20 +172,15 @@ cdef class TreeNode():
             self.lowQ = moves_c[highLen].q
             self.lowS = moves_c[highLen].s
             
-            self.lowQS = self.lowS
-            self.lowSQ = self.lowQ
-            
             for lowIdx in range(1, lowElems):
                 lqc = moves_c[highLen + lowIdx].q
-                lsc = moves_c[highLen +lowIdx].s
+                lsc = moves_c[highLen + lowIdx].s
                 
                 if lqc > self.lowQ:
                     self.lowQ = lqc
-                    self.lowQS = lsc
                     
                 if lsc > self.lowS:
                     self.lowS = lsc
-                    self.lowSQ = lqc
         else:
             self.lowQ = 0
             self.lowS = 0
@@ -198,8 +192,8 @@ cdef class TreeNode():
         cdef float allVisitsSq = self.getVisitsFactor()
 
         cdef int numKeys = self.numHighs
-#         cdef object moveKeys = self.state.getLegalMoves()
-#         cdef int numKeys = len(moveKeys)
+        #cdef object moveKeys = self.state.getLegalMoves()
+        #cdef int numKeys = len(moveKeys)
         
         cdef int useNoise = self.allVisits < 5
         
@@ -212,7 +206,7 @@ cdef class TreeNode():
 #         startIdx = 0
 #         dirNoise = np.zeros_like(dirNoise)
         
-        cdef int biasedIdx
+        cdef int biasedIdx, idx
         
         cdef TreeEdge e
         
@@ -226,7 +220,7 @@ cdef class TreeNode():
             if useNoise:
                 iNoise = dirNoise[idx]
             
-#             idx = moveKeys[idx]
+            #idx = moveKeys[idx]
             idx = self.highs[idx]
             
             e = self.edges[idx]
@@ -255,20 +249,32 @@ cdef class TreeNode():
         cdef float fastMoveValue = 0
         cdef float lowersBestValue
         
+        # some perf stats on a 13x13 board
+        # random player: +67%
+        # with grouping       12.847158 moves per second
+        # without grouping    7.675127 moves per second
+        
+        # somewhat trained player: +23%
+        # TODO why does the speed advantage DROP? didn't this optimization start with the idea of gaining the most when the player is well trained? wtf?
+        # with grouping       9.292355 moves per second
+        # without grouping    7.545963 moves per second 
+        
+        # conclusion: grouping is cool?
+        
+        # TODO have a look at 19x19 board values
+
         if not self.hasHighs:
             self.groupCurrentMoves(cpuct, &moveName)
         else:
             self.pickMoveFromHighs(cpuct, &moveName, &fastMoveValue)
-            lowersBestValue = self.lowQ + self.lowQS * self.getVisitsFactor()
-            lowersBestValue = max(self.lowSQ + self.lowS * self.getVisitsFactor(), lowersBestValue)
+            lowersBestValue = self.lowQ + self.lowS * self.getVisitsFactor()
             
-            # TODO test with different legal moves sizes
             if lowersBestValue >= fastMoveValue:
                 if self.noRegroupsNeededCount < 3:
-                    self.currentGroupSizeFactor = max(self.currentGroupSizeFactor - 0.25, 0.45)
-                elif self.noRegroupsNeededCount < 5:
-                    self.currentGroupSizeFactor = max(self.currentGroupSizeFactor - 0.1, 0.45)
-                elif self.noRegroupsNeededCount > 12:
+                    self.currentGroupSizeFactor = max(self.currentGroupSizeFactor - 0.25, 0.42)
+                elif self.noRegroupsNeededCount < 7:
+                    self.currentGroupSizeFactor = max(self.currentGroupSizeFactor - 0.1, 0.42)
+                elif self.noRegroupsNeededCount > 13:
                     self.currentGroupSizeFactor = min(self.currentGroupSizeFactor + 0.1, 0.95)
                 self.noRegroupsNeededCount = 0
                 self.groupCurrentMoves(cpuct, &moveName)

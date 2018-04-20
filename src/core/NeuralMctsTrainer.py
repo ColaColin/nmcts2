@@ -140,7 +140,7 @@ class NeuralMctsTrainer():
     
     def benchmarkShowsProgress(self):
         self.bestPlayer = self.learner.clone();
-        self.bestPlayer.learner.initState(os.path.join(self.workingdir, "learner.iter" + str(self.bestIteration)))
+        self.bestPlayer.learner.initState(os.path.join(self.workingdir, "learner.iter" + str(max(1, self.bestIteration))))
         
         comp = PlayerComparator(self.threads, self.championGames, self.pool)
         myWins, otherWins, draws, firstWins = comp.compare(self.learner, self.bestPlayer)
@@ -167,7 +167,7 @@ class NeuralMctsTrainer():
         
         asyncs = []
         
-        # for cProfile
+        # for cProfile switch off
         useMp = False
         
         for _ in range(self.threads):
