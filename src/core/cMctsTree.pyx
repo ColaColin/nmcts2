@@ -68,6 +68,10 @@ cdef class TreeNode():
     cdef object terminalResult
 
     cdef object dconst
+    
+    # index of the player that will get more mcts expansions in this state and all it's children
+    # used for unbalanceTrainingMctsFactor
+    cdef readonly int advantagePlayerIdx
 
     cdef float currentGroupSizeFactor
     cdef int noRegroupsNeededCount
@@ -85,6 +89,7 @@ cdef class TreeNode():
         self.currentGroupSizeFactor = 0.9
         self.noRegroupsNeededCount = 0
         self.allVisits = 0
+        self.advantagePlayerIdx = int((rand()/(<float>RAND_MAX)) * state.getPlayerCount())
     
     def __dealloc__(self):
         if self.highs != NULL:
@@ -316,6 +321,7 @@ cdef class TreeNode():
         newState.simulate(move)
 
         cdef TreeNode result = TreeNode(newState, noiseMix = self.noiseMix)
+        result.advantagePlayerIdx = self.advantagePlayerIdx
         result.parent = self.edges[move] 
         
         return result
@@ -406,11 +412,33 @@ cdef class TreeNode():
             self.terminalResult = r
         return self.terminalResult
 
-def batchedMcts(object states, int expansions, evaluator, float cpuct):
-    workspace = states
+def batchedMcts(object states, int expansions, evaluator, float cpuct, 
+                float unbalanceTrainingMctsFactor, object useAdvantagePlayer):
+    workspace = [s for s in states]
     cdef TreeNode tmp, node
     cdef int evallen, ixx
-    for ixx in range(expansions):
+    
+    #todo maybe rethink how to do this exactly in case of playernum != 2
+    cdef int badPlayerExpansions = <int>(expansions * 2 * (1-unbalanceTrainingMctsFactor))
+    cdef int goodPlayerExpansions = expansions * 2 - badPlayerExpansions
+    cdef int numGoodPlayers = len(workspace)
+
+    if useAdvantagePlayer:
+        workspace.sort(key=lambda x: 0 if x.state.getPlayerOnTurnIndex() == x.advantagePlayerIdx else 1)
+        sortedStates = [s for s in workspace]
+        numGoodPlayers = sum(map(lambda x: 1 if x.state.getPlayerOnTurnIndex() == x.advantagePlayerIdx else 0, workspace))
+    else:
+        sortedStates = states
+        goodPlayerExpansions = expansions
+        badPlayerExpansions = expansions
+    
+    for ixx in range(goodPlayerExpansions):
+        
+        if ixx == badPlayerExpansions:
+            workspace = workspace[:numGoodPlayers]
+            if len(workspace) == 0:
+                break
+        
         tlst = workspace
         workspace = []
         for i in range(len(tlst)):
@@ -434,4 +462,4 @@ def batchedMcts(object states, int expansions, evaluator, float cpuct):
             else:
                 node.expand(ev[0], ev[1])
             node.backup(w)
-            workspace[idx] = states[idx]
+            workspace[idx] = sortedStates[idx]

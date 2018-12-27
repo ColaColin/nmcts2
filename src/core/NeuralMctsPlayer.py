@@ -28,6 +28,8 @@ import math
 
 import os
 
+import sys
+
 def hconc(strs):
     result = ""
     
@@ -63,7 +65,7 @@ class TreeFrameGenerator():
             startIdx = idx * self.batchSize
             endIdx = (idx+1) * self.batchSize
             batch = self.runningGames[startIdx:min(endIdx, len(self.runningGames)+1)]
-            self.player.batchMcts(batch)
+            self.player.batchMcts(batch, useAdvantagePlayer = True)
     
     def printRunningGames(self):
         strs = [str(g.state) for g in self.runningGames]
@@ -74,13 +76,19 @@ class TreeFrameGenerator():
         finalizedFrames = []
         lastLog = 5
 
+        advantagePlayerWins = 0
+        disadvantagePlayerWins = 0
+        drawCount = 0
+
         while len(finalizedFrames) < n:
             
-            self.printRunningGames()
+            #self.printRunningGames()
             
             if lastLog <= len(finalizedFrames):
-                print("[Process#%i] Collected %i / %i, running %i games with %i roots" % (os.getpid(), len(finalizedFrames), n, len(self.runningGames), self.roots))
+                print("[Process#%i] Collected %i / %i, running %i games with %i roots and %i draws, advantagePlayerWins %i, disadvantagePlayerWins %i" % (os.getpid(), 
+                        len(finalizedFrames), n, len(self.runningGames), self.roots, drawCount, advantagePlayerWins, disadvantagePlayerWins))
                 lastLog = 500 + len(finalizedFrames)
+                sys.stdout.flush()
             
             currentGameCount = len(self.runningGames)
             targetGamesCount = self.targetGamesCount
@@ -164,6 +172,15 @@ class TreeFrameGenerator():
                                 ancestor[3] = (ancestor[3]) / (np.sum(ancestor[3]) + eps)
                                 if depth <= nextState.state.getPlayerCount() or ancestor[5] > 1:
                                     finalizedFrames.append(ancestor[:4])
+                                    if nextState.state.getWinner() == -1:
+                                        drawCount += 1
+                                    else:
+                                        # TODO next up: figure out if the advantageplayer system does in fact let the advaantage player win more, 
+                                    # so far it did not seem that way, which is suspicious 
+                                        if nextState.state.getWinner() == nextState.advantagePlayerIdx:
+                                            advantagePlayerWins += 1
+                                        else:
+                                            disadvantagePlayerWins += 1
 
                                 if ancestor[4] is None:
                                     self.roots -= 1
@@ -173,6 +190,8 @@ class TreeFrameGenerator():
             
             self.runningGames = newRunningGames
             self.unfinalizedFrames = newUnfinalFrames
+        
+        print("Completed collecting frames with a draw rate ", drawCount / len(finalizedFrames))
         
         return finalizedFrames
 
@@ -209,6 +228,7 @@ class NeuralMctsPlayer():
         self.batchMctsCalls = 0
         self.batchMctsTime = 0
         self.lastBatchMctsBenchmarkTime = time.time()
+        self.unbalanceTrainingMctsFactor = config["learning"]["unbalanceTrainingMctsFactor"]
 
     def clone(self):
         return NeuralMctsPlayer(self.stateTemplate, self.config, 
@@ -260,13 +280,13 @@ class NeuralMctsPlayer():
 
     def getBatchMctsResults(self, frames, startIndex):
         nodes = [TreeNode(n[0]) for n in frames]
-        self.batchMcts(nodes)
+        self.batchMcts(nodes, useAdvantagePlayer = False)
         result = []
         for idx, f in enumerate(nodes):
             result.append(( startIndex + idx, f.getMoveDistribution(), f.getBestValue() ))
         return result
     
-    def batchMcts(self, states):
+    def batchMcts(self, states, useAdvantagePlayer = False):
         """
         runs batched mcts guided by the learner
         yields a result for each state in the batch
@@ -277,7 +297,7 @@ class NeuralMctsPlayer():
         
         t = time.time()
         
-        batchedMcts(states, self.mctsExpansions, lambda ws: self.evaluateByLearner(ws), self.cpuct)
+        batchedMcts(states, self.mctsExpansions, lambda ws: self.evaluateByLearner(ws), self.cpuct, self.unbalanceTrainingMctsFactor, useAdvantagePlayer)
         
         self.batchMctsTime += (time.time() - t)
         self.batchMctsCalls += len(states)
@@ -288,6 +308,7 @@ class NeuralMctsPlayer():
             self.batchMctsTime = 0
             self.batchMctsCalls = 0
             print("[Process#%i]: %f moves per second " % (os.getpid(), bt))
+            sys.stdout.flush()
     
     # todo if one could get the caller to deal with the treenode data it might be possible to not throw away the whole tree that was build, increasing play strength
     def findBestMoves(self, states, noiseMix=0.2):
@@ -298,7 +319,7 @@ class NeuralMctsPlayer():
         the result is an array of moveIndices
         """
         ts = [TreeNode(s, noiseMix=noiseMix) if s != None else None for s in states]
-        self.batchMcts(ts)
+        self.batchMcts(ts, useAdvantagePlayer = False)
         bmoves = [self._pickMoves(1, s.getMoveDistribution(), s.state, False)[0] if s != None else None for s in ts]
         return bmoves
         
@@ -359,7 +380,7 @@ class NeuralMctsPlayer():
         while len(frames) < n:
 #             print("Begin batch")
 #             t = time.time()
-            self.batchMcts(batch)
+            self.batchMcts(batch, useAdvantagePlayer = True)
 #             print("Batch complete in %f" % (time.time() - t))
             
             for idx in range(batchSize):
@@ -377,7 +398,7 @@ class NeuralMctsPlayer():
                         if keepFramesPerc == 1.0 or random.random() < keepFramesPerc:
                             frames.append(f + [b.getTerminalResult()])
                     bframes[idx] = []
-                    batch[idx] = TreeNode(self.stateTemplate.getNewGame())
+                    batch[idx] = TreeNode(self.stateTemplate.getNewGame(), useAdvantagePlayer = True)
                 else:
                     batch[idx] = b
                 
@@ -434,7 +455,7 @@ class NeuralMctsPlayer():
                         assert b.state.getPlayerOnTurnIndex() == pIndex
                         
                 player = allPlayers[pIndex]
-                player.batchMcts(batch)
+                player.batchMcts(batch, useAdvantagePlayer = False)
                 
 #                 print(pIndex, someGame.state.c6, ["{0:.5f}".format(x) for x in someGame.getMoveDistribution()])
                 
@@ -464,6 +485,8 @@ class NeuralMctsPlayer():
                         newBatch.append(b)
                     
                 batch = newBatch
+
+        sys.stdout.flush()
 
         return results, gameFrames
         

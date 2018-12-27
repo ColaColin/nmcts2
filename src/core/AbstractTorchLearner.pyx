@@ -99,6 +99,7 @@ class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
     
     """
     this has to be able to deal with None values in the batch!
+    also if len(batch) > batchSize this will explode
     """
     def evaluate(self, batch):
         cdef int idx, bidx
@@ -119,7 +120,7 @@ class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
         #TODO systematically analyze all interaction with gpu memory and apply new findings
         netIn[:len(batch)] = self.networkInput[:len(batch)]
         
-        moveP, winP = self.net(netIn)
+        moveP, winP = self.net(netIn[:len(batch)])
         
         winP = torch.exp(winP)
         moveP = torch.exp(moveP)

@@ -15,6 +15,8 @@ import random
 import os
 import pickle
 
+import sys
+
 from core.misc import openJson, writeJson
 
 # given an N player game:
@@ -164,11 +166,12 @@ class NeuralMctsTrainer():
         framesPerProc = int(maxFrames / self.threads)
         
         print("Frames per process: " + str(framesPerProc))
+        sys.stdout.flush()
         
         asyncs = []
         
         # for cProfile switch off
-        useMp = False
+        useMp = True
         
         for _ in range(self.threads):
             if self.useTreeFrameGeneration:
@@ -204,6 +207,8 @@ class NeuralMctsTrainer():
         if ignoreFrames > 0:
             print("Ignored %i frames" % ignoreFrames)
         
+        sys.stdout.flush()
+        
         random.shuffle(self.frameHistory)
         
         for historicFrame in self.frameHistory:
@@ -224,12 +229,15 @@ class NeuralMctsTrainer():
 
         if time.time() - self.lastBenchmarkTime > self.benchmarkTime:
             print("Benchmarking progress...")
+            sys.stdout.flush()
             if self.benchmarkShowsProgress():
                 self.bestIteration = iteration
             self.lastBenchmarkTime = time.time()
             didBenchmark = True
 
         print("Iteration completed in %f" % (time.time() - t0))
+        
+        sys.stdout.flush()
         
         return didBenchmark
 

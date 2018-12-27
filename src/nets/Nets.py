@@ -58,7 +58,7 @@ class ResCNN(nn.Module):
         else:
             self.winHead = None
             
-        self.lsoftmax = nn.LogSoftmax()
+        self.lsoftmax = nn.LogSoftmax(dim=0)
     
     def forward(self, x):
         x = self.act(self.baseBn(self.baseConv(x)))
