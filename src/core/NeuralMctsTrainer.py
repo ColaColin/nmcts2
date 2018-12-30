@@ -139,6 +139,8 @@ class NeuralMctsTrainer():
         
         playersN = self.learner.stateTemplate.getPlayerCount()
         assert playersN % 2 == 0, "an uneven player count would create more issues and need a bit of code improvement in learnerIsNewChampion..."
+        
+        self.byThreadTreeGenerators = [None] * self.threads
     
     def benchmarkShowsProgress(self):
         self.bestPlayer = self.learner.clone();
@@ -172,27 +174,34 @@ class NeuralMctsTrainer():
         
         # for cProfile switch off
         useMp = True
-        
-        for _ in range(self.threads):
+         
+        for tidx in range(self.threads):
             if self.useTreeFrameGeneration:
                 if useMp:
-                    asyncs.append(self.pool.apply_async(self.learner.selfPlayGamesAsTree, args=(framesPerProc,)))
+                    asyncs.append(self.pool.apply_async(self.learner.selfPlayGamesAsTree, args=(framesPerProc, self.byThreadTreeGenerators[tidx])))
                 else:
-                    asyncs.append(self.learner.selfPlayGamesAsTree(framesPerProc))
+                    asyncs.append(self.learner.selfPlayGamesAsTree(framesPerProc, self.byThreadTreeGenerators[tidx])[0])
             else:
                 if useMp:
                     asyncs.append(self.pool.apply_async(self.learner.selfPlayNFrames, args=(framesPerProc, self.batchSize, keepFramesPerc)))
                 else:
                     asyncs.append(self.learner.selfPlayNFrames(framesPerProc, self.batchSize, keepFramesPerc))
-        
+         
+        self.byThreadTreeGenerators = []
+#         
         cframes = 0
         ignoreFrames = 0
         learnFrames = []
         newFrames = []
+         
         for asy in asyncs:
             asyResult = None
             if useMp:
                 asyResult = asy.get()
+                 
+                if self.useTreeFrameGeneration:
+                    self.byThreadTreeGenerators.append(asyResult[1])
+                    asyResult = asyResult[0]
             else:
                 asyResult = asy
             for f in asyResult:
@@ -225,6 +234,8 @@ class NeuralMctsTrainer():
         
         self.learnFrames(learnFrames, iteration)
 
+        assert False
+
         didBenchmark = False
 
         if time.time() - self.lastBenchmarkTime > self.benchmarkTime:
@@ -246,7 +257,7 @@ class NeuralMctsTrainer():
         
         random.shuffle(learnFrames)
         
-        self.learner.learner.learnFromFrames(learnFrames, iteration, reAugmentEvery=self.reAugmentEvery)
+        self.learner.learner.learnFromFrames(learnFrames, iteration, reAugmentEvery=self.reAugmentEvery, threads=self.threads)
         
         print("Done learning in %f" % (time.time() - t))
 

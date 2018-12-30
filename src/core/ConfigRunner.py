@@ -18,7 +18,7 @@ from core.NeuralMctsPlayer import NeuralMctsPlayer
 
 from core.misc import openJson
 
-from nets.Nets import ResCNN
+from nets.Nets import ResCNN, count_parameters
 
 def object_for_class_name(module_name):
     class_name = module_name.split(".")[-1]
@@ -69,10 +69,14 @@ class ConfigLearner(AbstractTorchLearner):
         netc = self.config["network"] 
         if (netc["type"] == "ResNet"):
             dims = self.gameInit.getGameDimensions()
-            return ResCNN(dims[0], dims[1], dims[2], 
+            result = ResCNN(dims[0], dims[1], dims[2], 
                           netc["firstBlockKernelSize"], netc["firstBlockFeatures"], 
                           netc["blockFeatures"], netc["blocks"], self.getMoveCount(), 
                           self.getPlayerCount())
+            
+            print("Created a network with %i parameters" % count_parameters(result))
+           
+            return result
         else:
             assert False, "unsupported network type"
 
@@ -176,8 +180,7 @@ if __name__ == '__main__':
     #workdir = "/MegaKeks/nmcts2/c6_13_compare_8"
     #runComparativeTraining(workdir)
 
-    workdir = "/MegaKeks/nmcts2/c6_7_test"
+    workdir = "/MegaKeks/nmcts2/c6_19_test"
     runSingleTraining(workdir)
-
     
     

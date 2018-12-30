@@ -18,6 +18,7 @@ Created on Oct 27, 2017
 import numpy as np
 
 #from core.MctsTree import TreeNode, batchedMcts
+# 10x speed
 from core.cMctsTree import TreeNode, batchedMcts  # @UnresolvedImport
 
 import random
@@ -29,6 +30,8 @@ import math
 import os
 
 import sys
+
+import torch.cuda
 
 def hconc(strs):
     result = ""
@@ -49,32 +52,32 @@ def hconc(strs):
 
 class TreeFrameGenerator():
     
-    def __init__(self, batchSize, poolSize, player):
+    def __init__(self, batchSize, poolSize):
         self.runningGames = []
         self.unfinalizedFrames = []
         self.roots = 0
         
-        self.player = player
         self.targetGamesCount = poolSize
         self.batchSize = batchSize
         
-    def mcts(self):
+    def mcts(self, player):
         # do mcts searches for all current states            
         batchCount = math.ceil(len(self.runningGames) / self.batchSize)
         for idx in range(batchCount):
             startIdx = idx * self.batchSize
             endIdx = (idx+1) * self.batchSize
             batch = self.runningGames[startIdx:min(endIdx, len(self.runningGames)+1)]
-            self.player.batchMcts(batch, useAdvantagePlayer = True)
+            player.batchMcts(batch, useAdvantagePlayer = True)
     
     def printRunningGames(self):
         strs = [str(g.state) for g in self.runningGames]
         print(hconc(strs))
         print("+++++++++++++++++++++++++++++++++++++++++++++++")
     
-    def generateNextN(self, n):
+    def generateNextN(self, n, player):
         finalizedFrames = []
         lastLog = 5
+        forceLog = True
 
         advantagePlayerWins = 0
         disadvantagePlayerWins = 0
@@ -84,34 +87,37 @@ class TreeFrameGenerator():
             
             #self.printRunningGames()
             
-            if lastLog <= len(finalizedFrames):
+            if forceLog or lastLog <= len(finalizedFrames):
                 print("[Process#%i] Collected %i / %i, running %i games with %i roots and %i draws, advantagePlayerWins %i, disadvantagePlayerWins %i" % (os.getpid(), 
                         len(finalizedFrames), n, len(self.runningGames), self.roots, drawCount, advantagePlayerWins, disadvantagePlayerWins))
-                lastLog = 500 + len(finalizedFrames)
+                if not forceLog:
+                    lastLog = 100 + len(finalizedFrames)
                 sys.stdout.flush()
+                forceLog = False
             
             currentGameCount = len(self.runningGames)
             targetGamesCount = self.targetGamesCount
-            
-            if currentGameCount == 0 or (targetGamesCount > currentGameCount and currentGameCount % 10 == 0):
-                self.runningGames.append(TreeNode(self.player.stateTemplate.getNewGame()))
+
+            if self.roots < targetGamesCount // 5 and (currentGameCount < 3 or (targetGamesCount > currentGameCount and currentGameCount % 5 == 0)):
+                self.runningGames.append(TreeNode(player.stateTemplate.getNewGame()))
                 self.unfinalizedFrames.append(None)
                 currentGameCount += 1
             
             newRunningGames = []
             newUnfinalFrames = []
             
-            self.mcts()
+            self.mcts(player)
             
             if (targetGamesCount > currentGameCount):
-                splits = min(2, targetGamesCount - currentGameCount)
+                splits = (targetGamesCount - currentGameCount)//5
+                
                 splitIdx = random.randint(0, currentGameCount)
                 splitIdxs = []
                 for i in range(splits):
                     offset = 0
                     for offset in range(currentGameCount + 1):
                         nextIdx = (splitIdx + i + offset) % currentGameCount
-                        if offset >= currentGameCount or (self.unfinalizedFrames[nextIdx] != None and self.unfinalizedFrames[nextIdx][6] > 3 and self.unfinalizedFrames[nextIdx][5] < 2):
+                        if self.unfinalizedFrames[nextIdx] != None and (offset >= currentGameCount or (self.unfinalizedFrames[nextIdx][6] > 2 and self.unfinalizedFrames[nextIdx][5] < 4)):
                             splitIdxs.append(nextIdx)
                             break
 
@@ -123,8 +129,9 @@ class TreeFrameGenerator():
                 for sIdx in splitIdxs:
                     if gidx == sIdx:
                         splitExtra += 1
-                
-                mvs = self.player._pickMoves(1 + splitExtra, md, g.state, g.state.isEarlyGame())
+                        break
+
+                mvs = player._pickMoves(1 + splitExtra, md, g.state, g.state.isEarlyGame())
                 
                 parentStateFrame = self.unfinalizedFrames[gidx]
 
@@ -223,8 +230,6 @@ class NeuralMctsPlayer():
         self.mctsExpansions = config["learning"]["mctsExpansions"] # a value of 1 here will make it basically play by the network probabilities in a greedy way #TODO test that
         self.learner = learner
         self.cpuct = 0.5424242 #hmm TODO: investigate the influence of this factor on the speed of learning
-        self.treeFrameGenerator = TreeFrameGenerator(
-            config["learning"]["batchSize"], config["learning"]["treePoolSize"], self)
         self.batchMctsCalls = 0
         self.batchMctsTime = 0
         self.lastBatchMctsBenchmarkTime = time.time()
@@ -274,9 +279,39 @@ class NeuralMctsPlayer():
                 m = [ms[np.argmax(ps)]]
         return m
 
+    def isRelevantEvaluationInput(self, s):
+        return s != None and not s.isTerminal()
+
+    def getNonRelevantEvaluationResult(self, s):
+        return (None, s.getTerminalResult())
+    
     def evaluateByLearner(self, states):
-        evalin = [s.state if s != None else None for s in states]
-        return self.learner.evaluate(evalin) 
+        packed = []
+        packIdxMap = {}
+        hasInput = False
+        
+        for idx, s in enumerate(states):
+            if s != None and not s.state.isTerminal():
+                hasInput = True
+                packed.append(s.state)
+                pidx = len(packed)-1
+                packIdxMap[idx] = pidx
+        
+        if hasInput:
+            eResults = self.learner.evaluate(packed)
+        else:
+            eResults = []
+        
+        finalResults = [None] * len(states)
+
+        for idx in range(len(states)):
+            if states[idx] != None:
+                if (states[idx].state.isTerminal()):
+                    finalResults[idx] = (None, states[idx].getTerminalResult())
+                else:
+                    finalResults[idx] = eResults[packIdxMap[idx]]
+        
+        return finalResults
 
     def getBatchMctsResults(self, frames, startIndex):
         nodes = [TreeNode(n[0]) for n in frames]
@@ -297,12 +332,12 @@ class NeuralMctsPlayer():
         
         t = time.time()
         
-        batchedMcts(states, self.mctsExpansions, lambda ws: self.evaluateByLearner(ws), self.cpuct, self.unbalanceTrainingMctsFactor, useAdvantagePlayer)
+        batchedMcts(states, self.mctsExpansions, lambda ws: self.evaluateByLearner(ws), self.cpuct)
         
         self.batchMctsTime += (time.time() - t)
         self.batchMctsCalls += len(states)
         
-        if self.lastBatchMctsBenchmarkTime < (time.time() - 60 * 5):
+        if self.lastBatchMctsBenchmarkTime < (time.time() - 60 * 3):
             self.lastBatchMctsBenchmarkTime = time.time()
             bt= self.batchMctsCalls / self.batchMctsTime
             self.batchMctsTime = 0
@@ -356,11 +391,15 @@ class NeuralMctsPlayer():
         print("Game over")
         print(stateFormatter(state))
         
-        # TODO verify this works, then use this on a small test problem to gauge the effect on .. everything
-        # Result 1: it does work. On 19x19 connect6. So much for a small test problem... still need to gauge the effects...
-    def selfPlayGamesAsTree(self, collectFrameCount):
+    def selfPlayGamesAsTree(self, collectFrameCount, treeGen = None):
+        torch.cuda.empty_cache() #this is mainly here to verify it won't crash before spending a few hours generating frames...
+        if treeGen is None:
+            treeGen = TreeFrameGenerator(self.config["learning"]["batchSize"], self.config["learning"]["treePoolSize"])
+        
         self.lastBatchMctsBenchmarkTime = time.time()
-        return self.treeFrameGenerator.generateNextN(collectFrameCount)
+        frames = treeGen.generateNextN(collectFrameCount, self) 
+        torch.cuda.empty_cache()
+        return frames, None #fck python...
         
     def selfPlayNFrames(self, n, batchSize, keepFramesPerc):
         self.lastBatchMctsBenchmarkTime = time.time()
@@ -378,10 +417,10 @@ class NeuralMctsPlayer():
             bframes.append([])
         
         while len(frames) < n:
-#             print("Begin batch")
-#             t = time.time()
+            print("Begin batch")
+            t = time.time()
             self.batchMcts(batch, useAdvantagePlayer = True)
-#             print("Batch complete in %f" % (time.time() - t))
+            print("Batch complete in %f" % (time.time() - t))
             
             for idx in range(batchSize):
                 b = batch[idx]
@@ -402,8 +441,9 @@ class NeuralMctsPlayer():
                 else:
                     batch[idx] = b
                 
+                
+        torch.cuda.empty_cache()
         return frames
-        
         
     def playAgainst(self, n, batchSize, others, collectFrames=False):
         """

@@ -86,7 +86,7 @@ cdef class TreeNode():
         self.hasHighs = 0
         self.terminalResult = None
         self.dconst = np.asarray([0.03] * mc, dtype="float32")
-        self.currentGroupSizeFactor = 0.9
+        self.currentGroupSizeFactor = 0.89133742
         self.noRegroupsNeededCount = 0
         self.allVisits = 0
         self.advantagePlayerIdx = int((rand()/(<float>RAND_MAX)) * state.getPlayerCount())
@@ -192,13 +192,15 @@ cdef class TreeNode():
             
         free(moves_c)
     
-    cdef void pickMoveFromHighs(self, float cpuct, int* moveName, float* moveValue):
+    cdef void pickMoveFromHighs(self, float cpuct, int* moveName, float* moveValue, int useGrouping):
         
         cdef float allVisitsSq = self.getVisitsFactor()
 
         cdef int numKeys = self.numHighs
-        #cdef object moveKeys = self.state.getLegalMoves()
-        #cdef int numKeys = len(moveKeys)
+        
+        if not useGrouping:
+            moveKeys = self.state.getLegalMoves()
+            numKeys = len(moveKeys)
         
         cdef int useNoise = self.allVisits < 5
         
@@ -208,14 +210,15 @@ cdef class TreeNode():
         
         cdef int startIdx = int((rand()/(<float>RAND_MAX)) * numKeys)
         
-#         startIdx = 0
-#         dirNoise = np.zeros_like(dirNoise)
+#             startIdx = 0
+#             dirNoise = np.zeros_like(dirNoise)
         
         cdef int biasedIdx, idx
         
         cdef TreeEdge e
         
         cdef float p, u, value, iNoise
+        iNoise = 0
         
         cdef int vc
         
@@ -225,8 +228,10 @@ cdef class TreeNode():
             if useNoise:
                 iNoise = dirNoise[idx]
             
-            #idx = moveKeys[idx]
-            idx = self.highs[idx]
+            if useGrouping:
+                idx = self.highs[idx]
+            else:
+                idx = moveKeys[idx]
             
             e = self.edges[idx]
             
@@ -252,39 +257,22 @@ cdef class TreeNode():
     cdef TreeNode selectMove(self, float cpuct):
         cdef int moveName = -1
         cdef float fastMoveValue = 0
-        cdef float lowersBestValue
+        cdef float lowersBestValue = 0
         
-        # some perf stats on a 13x13 board
-        # random player: +67%
-        # with grouping       12.847158 moves per second
-        # without grouping    7.675127 moves per second
+        # on a 19x19 board this can yield 100%+ improvement...
+        cdef int useGrouping = 1
         
-        # somewhat trained player: +23%
-        # TODO why does the speed advantage DROP? didn't this optimization start with the idea of gaining the most when the player is well trained? wtf?
-        # with grouping       9.292355 moves per second
-        # without grouping    7.545963 moves per second 
-        
-        # conclusion: grouping is cool?
-        
-        # TODO have a look at 19x19 board values
-
-        if not self.hasHighs:
-            self.groupCurrentMoves(cpuct, &moveName)
+        if not useGrouping:
+            self.pickMoveFromHighs(cpuct, &moveName, &fastMoveValue, useGrouping)
         else:
-            self.pickMoveFromHighs(cpuct, &moveName, &fastMoveValue)
-            lowersBestValue = self.lowQ + self.lowS * self.getVisitsFactor()
-            
-            if lowersBestValue >= fastMoveValue:
-                if self.noRegroupsNeededCount < 3:
-                    self.currentGroupSizeFactor = max(self.currentGroupSizeFactor - 0.25, 0.42)
-                elif self.noRegroupsNeededCount < 7:
-                    self.currentGroupSizeFactor = max(self.currentGroupSizeFactor - 0.1, 0.42)
-                elif self.noRegroupsNeededCount > 13:
-                    self.currentGroupSizeFactor = min(self.currentGroupSizeFactor + 0.1, 0.95)
-                self.noRegroupsNeededCount = 0
+            if not self.hasHighs:
                 self.groupCurrentMoves(cpuct, &moveName)
             else:
-                self.noRegroupsNeededCount += 1
+                self.pickMoveFromHighs(cpuct, &moveName, &fastMoveValue, useGrouping)
+                lowersBestValue = self.lowQ + self.lowS * self.getVisitsFactor()
+                
+                if lowersBestValue >= fastMoveValue:
+                    self.groupCurrentMoves(cpuct, &moveName)
         
         cdef TreeEdge edge = self.edges[moveName]
         
@@ -412,34 +400,15 @@ cdef class TreeNode():
             self.terminalResult = r
         return self.terminalResult
 
-def batchedMcts(object states, int expansions, evaluator, float cpuct, 
-                float unbalanceTrainingMctsFactor, object useAdvantagePlayer):
+def batchedMcts(object states, int expansions, evaluator, float cpuct):
     workspace = [s for s in states]
+    
     cdef TreeNode tmp, node
     cdef int evallen, ixx
     
-    #todo maybe rethink how to do this exactly in case of playernum != 2
-    cdef int badPlayerExpansions = <int>(expansions * 2 * (1-unbalanceTrainingMctsFactor))
-    cdef int goodPlayerExpansions = expansions * 2 - badPlayerExpansions
-    cdef int numGoodPlayers = len(workspace)
-
-    if useAdvantagePlayer:
-        workspace.sort(key=lambda x: 0 if x.state.getPlayerOnTurnIndex() == x.advantagePlayerIdx else 1)
-        sortedStates = [s for s in workspace]
-        numGoodPlayers = sum(map(lambda x: 1 if x.state.getPlayerOnTurnIndex() == x.advantagePlayerIdx else 0, workspace))
-    else:
-        sortedStates = states
-        goodPlayerExpansions = expansions
-        badPlayerExpansions = expansions
-    
-    for ixx in range(goodPlayerExpansions):
-        
-        if ixx == badPlayerExpansions:
-            workspace = workspace[:numGoodPlayers]
-            if len(workspace) == 0:
-                break
-        
+    for ixx in range(expansions):
         tlst = workspace
+        
         workspace = []
         for i in range(len(tlst)):
             tmp = tlst[i]
@@ -462,4 +431,4 @@ def batchedMcts(object states, int expansions, evaluator, float cpuct,
             else:
                 node.expand(ev[0], ev[1])
             node.backup(w)
-            workspace[idx] = sortedStates[idx]
+            workspace[idx] = states[idx]

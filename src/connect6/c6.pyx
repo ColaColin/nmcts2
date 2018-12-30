@@ -302,15 +302,34 @@ cdef void placeC6(Connect6_c* c6, int x, int y):
     c6.turn += 1;
     _searchWinnerC6(c6, x, y);
 
+cdef unsigned long long seed = 1
+
 cdef class Connect6State:
     cdef Connect6_c* c6
     cdef object legalMoves
+    
+    cdef readonly unsigned long long id
+    cdef readonly unsigned long long lastId
+    cdef readonly int lastMove
     
     def __init__(self):
         self.legalMoves = None
         # the caller of the constructer needs to always construct this directly
         # TODO figure out a less nasty way to handle this
         self.c6 = NULL
+        self.initId()
+    
+    def initId(self):
+        self.lastMove = -1
+        self.lastId = 0
+        self.id = 0
+        self.nextId()
+
+    def nextId(self):
+        global seed
+        self.lastId = self.id
+        self.id = seed
+        seed += 1
         
     def __dealloc__(self):
         freeC6(self.c6)
@@ -321,6 +340,7 @@ cdef class Connect6State:
     def __setstate__(self, d):
         self.legalMoves = None
         self.c6 = pickleUnpackC6(d)
+        self.initId()
     
     def __str__(self):
         return toStringC6(self.c6)
@@ -407,6 +427,7 @@ cdef class Connect6State:
         """
         c = Connect6State()
         c.c6 = cloneC6(self.c6)
+        c.id = self.id
         return c
     
     def getFrameClone(self):
@@ -414,9 +435,11 @@ cdef class Connect6State:
         returns a copy that will be used as data for frames. Can probably save some memory. The returned object
         strictly only needs to implement mapPlayerIndexToTurnRel (TODO that should not be necessary...)
         and be useful to the fillNetworkInput implementation
-    """
+        """
+        
         c = Connect6State()
         c.c6 = cloneC6(self.c6)
+        c.id = self.id
         return c
     
     def getNewGame(self):
@@ -456,6 +479,41 @@ cdef class Connect6State:
         x = key % self.c6.m
         y = key / self.c6.m
         placeC6(self.c6, x, y)
+        
+        self.lastMove = move
+        self.nextId()
+    
+    def updateTensorForLastMove(self, object tensor, int batchIndex):
+        cdef int x, y, b
+        cdef Connect6_c* c6 = self.c6
+        
+        x = self.lastMove % self.c6.m
+        y = self.lastMove / self.c6.m
+        
+        b = readField(c6.board, c6.m, x, y)
+        if b != -1:
+            b = self.mapPlayerIndexToTurnRel(b)
+        tensor[batchIndex, 0, y, x] = b
+    
+    def invertTensorField(self, object tensor, batchIndex):
+        """
+        inverts the field of the previous state in case this is the first move of the current player
+        inversion means:
+        -1 stays -1
+        0 turns into 1
+        1 turns into 0
+        if this is the 2nd move of the current player, do nothing
+        
+        invert for turns:
+        1, 3, 5, 7, 9, ....
+        -> uneven turns
+        """
+        
+        if self.getTurn() % 2 == 1:
+            mask = tensor[batchIndex] == -1
+            tensor[batchIndex] += 1
+            tensor[batchIndex] %= 2
+            tensor[batchIndex].masked_fill_(mask, -1)
     
     def isEqual(self, other):
         """

@@ -129,6 +129,7 @@ class Connect6():
 class Connect6State(AbstractState):
     def __init__(self, c6):
         super(Connect6State, self).__init__()
+        assert False, "assert: cython version is used!"
         self.c6 = c6
         self.legalMoves = None
         

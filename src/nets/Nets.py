@@ -6,6 +6,9 @@ Created on Apr 3, 2018
 
 import torch.nn as nn
 
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
 class ResBlock(nn.Module):
     def __init__(self, features):
         super(ResBlock, self).__init__()
@@ -58,7 +61,7 @@ class ResCNN(nn.Module):
         else:
             self.winHead = None
             
-        self.lsoftmax = nn.LogSoftmax(dim=0)
+        self.lsoftmax = nn.LogSoftmax(dim=1)
     
     def forward(self, x):
         x = self.act(self.baseBn(self.baseConv(x)))

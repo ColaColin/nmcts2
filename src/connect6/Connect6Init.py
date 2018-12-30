@@ -11,6 +11,7 @@ def stateFormat(state):
 
 class Connect6Init():
     def __init__(self):
+        assert False, "assert: cython version is used!"
         self.stateFormat = stateFormat
 
     def setConfig(self, config):
@@ -32,6 +33,7 @@ class Connect6Init():
         return [self.m, self.n, 1]
     
     def fillNetworkInput(self, state, tensor, batchIndex):
+        assert False, "assert: cython version is used!"
         for y in range(self.n):
             bline = state.c6.board[y]
             for x in range(self.m):

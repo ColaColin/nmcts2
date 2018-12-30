@@ -19,11 +19,11 @@ class TreeEdge():
         self.priorP = priorP
         self.parentNode = parentNode
         self.childNode = None
+
         
 # cython: turn into an extension type shell that adapts the raw c tree search
 class TreeNode():
     def __init__(self, state, parentEdge=None, noiseMix = 0.1): 
-        assert False, "old code, why no cython?"
         mc = state.getMoveCount()
 
         # internal mapping of move keys -> TreeNode associated with taking that move,
