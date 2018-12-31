@@ -1,4 +1,4 @@
-# cython: profile=True
+# cython: profile=False
 
 '''
 Created on Apr 15, 2018
@@ -164,7 +164,7 @@ cdef struct Connect6_c:
     signed char* board
 
 cdef object toStringC6(Connect6_c* c6):
-        mm = ['.', 'X', 'O']
+        mm = ['.', '█', '░']
         s = "Connect6(%i,%i), " %  (c6.m, c6.n)
         if hasEndedC6(c6) == 0:
             s += "Turn %i: %s\n" % (c6.turn, mm[getPlayerIndexOnTurnC6(c6)+1])

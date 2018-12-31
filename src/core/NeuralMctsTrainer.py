@@ -173,8 +173,8 @@ class NeuralMctsTrainer():
         asyncs = []
         
         # for cProfile switch off
-        useMp = False
-         
+        useMp = True
+        
         for tidx in range(self.threads):
             if self.useTreeFrameGeneration:
                 if useMp:

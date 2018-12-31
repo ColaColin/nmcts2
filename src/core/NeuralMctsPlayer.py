@@ -181,13 +181,6 @@ class TreeFrameGenerator():
                                     finalizedFrames.append(ancestor[:4])
                                     if nextState.state.getWinner() == -1:
                                         drawCount += 1
-                                    else:
-                                        # TODO next up: figure out if the advantageplayer system does in fact let the advaantage player win more, 
-                                    # so far it did not seem that way, which is suspicious 
-                                        if nextState.state.getWinner() == nextState.advantagePlayerIdx:
-                                            advantagePlayerWins += 1
-                                        else:
-                                            disadvantagePlayerWins += 1
 
                                 if ancestor[4] is None:
                                     self.roots -= 1

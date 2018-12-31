@@ -190,7 +190,7 @@ if __name__ == '__main__':
     #runComparativeTraining(workdir)
 
     workdir = "/MegaKeks/nmcts2/c6_19_test"
-    #workdir = "/MegaKeks/nmcts2/c6_quick_check"
+    #workdir = "/MegaKeks/nmcts2/c6_quick_check2"
     runSingleTraining(workdir)
     
     
