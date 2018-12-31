@@ -1,4 +1,4 @@
-# cython: profile=False
+# cython: profile=True
 
 '''
 Created on Oct 27, 2017

@@ -1,3 +1,5 @@
+# cython: profile=True
+
 '''
 Created on Apr 15, 2018
 
