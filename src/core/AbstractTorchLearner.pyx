@@ -21,6 +21,22 @@ import time
 
 import multiprocessing as mp
 
+def fillTrainingSetPart0(gameInit, playerCount, frames, startIndex, moveOutput, winOutput, networkInput):
+    moveOutput[startIndex : startIndex + len(frames)].fill_(0)
+    winOutput[startIndex : startIndex + len(frames)].fill_(0)
+    networkInput[startIndex : startIndex + len(frames)].fill_(0)
+    
+    for fidx, frame in enumerate(frames):
+        augmented = frame[0].augmentFrame(frame)
+        
+        gameInit.fillNetworkInput(augmented[0], networkInput, startIndex + fidx)
+        
+        for idx, p in enumerate(augmented[1]):
+            moveOutput[startIndex + fidx, idx] = p
+        
+        for pid in range(playerCount):
+            winOutput[startIndex + fidx, augmented[0].mapPlayerIndexToTurnRel(pid)] = frame[3][pid]
+
 class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
     def __init__(self, framesBufferSize, batchSize, epochs, lr_schedule):
         assert framesBufferSize % batchSize == 0
@@ -217,21 +233,21 @@ class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
                 self.winOutput[fidx, augmented[0].mapPlayerIndexToTurnRel(pid)] = frame[3][pid]
     
 
-    def fillTrainingSetPart(self, frames, startIndex, moveOutput, winOutput, networkInput):
-        moveOutput[startIndex : startIndex + len(frames)].fill_(0)
-        winOutput[startIndex : startIndex + len(frames)].fill_(0)
-        networkInput[startIndex : startIndex + len(frames)].fill_(0)
-        
-        for fidx, frame in enumerate(frames):
-            augmented = frame[0].augmentFrame(frame)
-            
-            self.fillNetworkInput(augmented[0], networkInput, startIndex + fidx)
-            
-            for idx, p in enumerate(augmented[1]):
-                moveOutput[startIndex + fidx, idx] = p
-            
-            for pid in range(self.getPlayerCount()):
-                winOutput[startIndex + fidx, augmented[0].mapPlayerIndexToTurnRel(pid)] = frame[3][pid]
+#     def fillTrainingSetPart(self, frames, startIndex, moveOutput, winOutput, networkInput):
+#         moveOutput[startIndex : startIndex + len(frames)].fill_(0)
+#         winOutput[startIndex : startIndex + len(frames)].fill_(0)
+#         networkInput[startIndex : startIndex + len(frames)].fill_(0)
+#         
+#         for fidx, frame in enumerate(frames):
+#             augmented = frame[0].augmentFrame(frame)
+#             
+#             self.fillNetworkInput(augmented[0], networkInput, startIndex + fidx)
+#             
+#             for idx, p in enumerate(augmented[1]):
+#                 moveOutput[startIndex + fidx, idx] = p
+#             
+#             for pid in range(self.getPlayerCount()):
+#                 winOutput[startIndex + fidx, augmented[0].mapPlayerIndexToTurnRel(pid)] = frame[3][pid]
     
     def learnFromFrames(self, frames, iteration, dbg=False, reAugmentEvery=1, threads=4):
         assert(len(frames) <= self.framesBufferSize), str(len(frames)) + "/" + str(self.framesBufferSize)
@@ -269,7 +285,7 @@ class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
                     if i == threads - 1:
                         endIndex = len(frames)
                     
-                    asyncs.append(pool.apply_async(self.fillTrainingSetPart, args=(frames[startIndex:endIndex], startIndex, self.moveOutput, self.winOutput, self.networkInput)))
+                    asyncs.append(pool.apply_async(fillTrainingSetPart0, args=(self.getGameInit(), self.getPlayerCount(), frames[startIndex:endIndex], startIndex, self.moveOutput, self.winOutput, self.networkInput)))
                 
                 for asy in asyncs:
                     asy.get()

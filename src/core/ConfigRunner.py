@@ -86,6 +86,15 @@ class ConfigLearner(AbstractTorchLearner):
         else:
             return optim.SGD(net.parameters(), lr=0.01, momentum=0.9, weight_decay=0.0001, nesterov=True)
 
+    def getGameInit(self):
+        return self.gameInit
+
+    def detachFillNetworkFunc(self):
+        gInit = self.gameInit
+        def f(state, tensor, batchIndex):
+            gInit.fillNetworkInput(state, tensor, batchIndex)
+        return f
+
     def fillNetworkInput(self, state, tensor, batchIndex):
         self.gameInit.fillNetworkInput(state, tensor, batchIndex)
 
@@ -180,7 +189,8 @@ if __name__ == '__main__':
     #workdir = "/MegaKeks/nmcts2/c6_13_compare_8"
     #runComparativeTraining(workdir)
 
-    workdir = "/MegaKeks/nmcts2/c6_19_test"
+    #workdir = "/MegaKeks/nmcts2/c6_19_test"
+    workdir = "/MegaKeks/nmcts2/c6_quick_check"
     runSingleTraining(workdir)
     
     

@@ -234,8 +234,6 @@ class NeuralMctsTrainer():
         
         self.learnFrames(learnFrames, iteration)
 
-        assert False
-
         didBenchmark = False
 
         if time.time() - self.lastBenchmarkTime > self.benchmarkTime:
