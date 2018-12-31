@@ -24,33 +24,27 @@ cdef int cmp_move_data(const void* a, const void *b) nogil:
     else:
         return -1
 
-cdef struct TreeEdge:
-    int visitCount
-    float totalValue
-    float meanValue
-    float priorP
-    int exists
-
-cdef void setupEdge(TreeEdge* ptr, float priorP):
-    ptr[0].visitCount = 0
-    ptr[0].totalValue = 0
-    ptr[0].exists = 1
-    ptr[0].meanValue = 0.5 # TODO this should not be a hardcoded value
-    ptr[0].priorP = priorP
+cdef class TreeEdge():
+    cdef int visitCount
+    cdef float totalValue
+    cdef float meanValue
+    cdef float priorP
+    cdef TreeNode parentNode
+    cdef TreeNode childNode
+    
+    def __init__(self, float priorP, TreeNode parentNode):
+        self.visitCount = 0
+        self.totalValue = 0
+        # TODO this should not be a hardcoded value
+        self.meanValue = 0.5 # TODO have a look at modeling this as a distribution instead of a mean, see arXiv 1707.06887 as detailed inspiration. How to apply that to MCTS?
+        self.priorP = priorP
+        self.parentNode = parentNode
+        self.childNode = None
 
 cdef class TreeNode():
     
-    cdef int numEdges
-    cdef TreeEdge* edges
-    cdef TreeEdge* parentEdge
-    
-    cdef TreeNode parentNode
-    
-    cdef object childNodes
-    
-    cdef int* legalMoveKeys
-    cdef int numLegalMoves
-    
+    cdef object edges
+    cdef TreeEdge parent
     # how many times an action was chosen on this TreeNode
     cdef int allVisits
     
@@ -63,7 +57,7 @@ cdef class TreeNode():
 
     cdef float stateValue
     
-    cdef float* movePMap
+    cdef object movePMap
     
     cdef float noiseMix
     
@@ -74,40 +68,20 @@ cdef class TreeNode():
     cdef object terminalResult
 
     cdef object dconst
+    
+    # index of the player that will get more mcts expansions in this state and all it's children
+    # used for unbalanceTrainingMctsFactor
+    cdef readonly int advantagePlayerIdx
 
     cdef float currentGroupSizeFactor
     cdef int noRegroupsNeededCount
 
-    cdef MoveData* moves_c
-
     def __init__(self, state, noiseMix = 0.1):
+        mc = state.getMoveCount()
         self.state = state
         self.noiseMix = noiseMix
-
-        mc = self.state.getMoveCount()
-        
-        self.numEdges = mc
-        
-        self.edges = <TreeEdge*> malloc(mc * sizeof(TreeEdge))
-        for i in range(self.numEdges):
-            self.edges[i].exists = 0
-
-        self.parentEdge = NULL
-        
-        self.childNodes = [None] * self.numEdges
-        self.parentNode = None
-        
-        cdef object lObjMoves = self.state.getLegalMoves()
-        self.numLegalMoves = len(lObjMoves)
-        self.legalMoveKeys = <int*> malloc(self.numLegalMoves * sizeof(int))
-        
-        for i in range(self.numLegalMoves):
-            self.legalMoveKeys[i] = lObjMoves[i]
-        
-        self.moves_c = <MoveData*> malloc(self.numLegalMoves * sizeof(MoveData))
-        
-        self.movePMap = <float*> malloc(self.numEdges * sizeof(float))
-        
+        self.edges = [None] * mc
+        self.movePMap = None
         self.highs = NULL
         self.hasHighs = 0
         self.terminalResult = None
@@ -115,14 +89,11 @@ cdef class TreeNode():
         self.currentGroupSizeFactor = 0.89133742
         self.noRegroupsNeededCount = 0
         self.allVisits = 0
+        self.advantagePlayerIdx = int((rand()/(<float>RAND_MAX)) * state.getPlayerCount())
     
     def __dealloc__(self):
         if self.highs != NULL:
             free(self.highs)
-        free(self.edges)
-        free(self.legalMoveKeys)
-        free(self.moves_c)
-        free(self.movePMap)
     
     # .0001 means that in the case of a new node with zero visits it will chose whatever has the best P
     # instead of just the move with index 0
@@ -130,25 +101,25 @@ cdef class TreeNode():
     cdef inline float getVisitsFactor(self):
         return self.allVisits ** 0.5 + 0.0001
     
-    cdef void prepareMoveGrouping(self, float f, float cpuct, MoveData* moves_c):
+    cdef void prepareMoveGrouping(self, int numLegalMoves, object lMoves, float f, float cpuct, MoveData* moves_c):
         cdef int move, vc, idx, biasedIdx
-        cdef TreeEdge* e
+        cdef TreeEdge e
         cdef float q, p, s
         
         cdef MoveData* mtmp
         
-        cdef int startIdx = int((rand()/(<float>RAND_MAX)) * self.numLegalMoves)
+        cdef int startIdx = int((rand()/(<float>RAND_MAX)) * numLegalMoves)
         
-        for biasedIdx in range(self.numLegalMoves):
-            idx = (biasedIdx + startIdx) % self.numLegalMoves
+        for biasedIdx in range(numLegalMoves):
+            idx = (biasedIdx + startIdx) % numLegalMoves
             
-            move = self.legalMoveKeys[idx]
-            e = self.edges + move
+            move = lMoves[idx]
+            e = self.edges[move]
             
-            if e[0].exists:
-                q = e[0].meanValue
-                p = e[0].priorP
-                vc = e[0].visitCount
+            if e is not None:
+                q = e.meanValue
+                p = e.priorP
+                vc = e.visitCount
             else:
                 q = self.stateValue
                 p = self.movePMap[move]
@@ -162,18 +133,23 @@ cdef class TreeNode():
             mtmp.s = s
             mtmp.value = (<double>q) + (<double>s) * (<double>f)
         
-        qsort(&moves_c[0], self.numLegalMoves, sizeof(MoveData), &cmp_move_data)
+        qsort(&moves_c[0], numLegalMoves, sizeof(MoveData), &cmp_move_data)
     
     cdef void groupCurrentMoves(self, float cpuct, int* bestMove):
+        cdef object lMoves = self.state.getLegalMoves()
+        cdef int numLegalMoves = len(lMoves)
+        
         cdef float f = self.getVisitsFactor()
         
-        self.prepareMoveGrouping(f, cpuct, self.moves_c)
+        cdef MoveData* moves_c = <MoveData*> malloc(numLegalMoves * sizeof(MoveData))
+        
+        self.prepareMoveGrouping(numLegalMoves, lMoves, f, cpuct, moves_c)
        
-        cdef int highLen = self.numLegalMoves - <int>(self.numLegalMoves * self.currentGroupSizeFactor)
+        cdef int highLen = numLegalMoves - <int>(numLegalMoves * self.currentGroupSizeFactor)
         
         cdef int minHighs = 5
         if highLen < minHighs:
-            highLen = min(minHighs, self.numLegalMoves)
+            highLen = min(minHighs, numLegalMoves)
         
         cdef int needMalloc = not self.hasHighs
         if self.hasHighs and self.numHighs < highLen:
@@ -187,23 +163,23 @@ cdef class TreeNode():
         
         cdef int i
         for i in range(self.numHighs):
-            self.highs[i] = self.moves_c[i].move
+            self.highs[i] = moves_c[i].move
         
         # at this point all moves in highs are legal, no need to check
         bestMove[0] = self.highs[0]
         
         cdef float lqc, lsc
         
-        cdef int lowElems = self.numLegalMoves - highLen
+        cdef int lowElems = numLegalMoves - highLen
         cdef int lowIdx
         
         if lowElems > 0:
-            self.lowQ = self.moves_c[highLen].q
-            self.lowS = self.moves_c[highLen].s
+            self.lowQ = moves_c[highLen].q
+            self.lowS = moves_c[highLen].s
             
             for lowIdx in range(1, lowElems):
-                lqc = self.moves_c[highLen + lowIdx].q
-                lsc = self.moves_c[highLen + lowIdx].s
+                lqc = moves_c[highLen + lowIdx].q
+                lsc = moves_c[highLen + lowIdx].s
                 
                 if lqc > self.lowQ:
                     self.lowQ = lqc
@@ -213,6 +189,8 @@ cdef class TreeNode():
         else:
             self.lowQ = 0
             self.lowS = 0
+            
+        free(moves_c)
     
     cdef void pickMoveFromHighs(self, float cpuct, int* moveName, float* moveValue, int useGrouping):
         
@@ -237,7 +215,7 @@ cdef class TreeNode():
         
         cdef int biasedIdx, idx
         
-        cdef TreeEdge* e
+        cdef TreeEdge e
         
         cdef float p, u, value, iNoise
         iNoise = 0
@@ -255,12 +233,12 @@ cdef class TreeNode():
             else:
                 idx = moveKeys[idx]
             
-            e = self.edges + idx
+            e = self.edges[idx]
             
-            if e[0].exists:
-                q = e[0].meanValue
-                p = e[0].priorP
-                vc = e[0].visitCount
+            if e is not None:
+                q = e.meanValue
+                p = e.priorP
+                vc = e.visitCount
             else:
                 q = self.stateValue
                 p = self.movePMap[idx]
@@ -296,15 +274,16 @@ cdef class TreeNode():
                 if lowersBestValue >= fastMoveValue:
                     self.groupCurrentMoves(cpuct, &moveName)
         
-        cdef TreeEdge* edge = self.edges + moveName
+        cdef TreeEdge edge = self.edges[moveName]
         
-        if edge[0].exists == 0:
-            setupEdge(edge, self.movePMap[moveName])
+        if edge is None:
+            edge = TreeEdge(self.movePMap[moveName], self)
+            self.edges[moveName] = edge
         
-        if self.childNodes[moveName] is None:
-            self.childNodes[moveName] = self.executeMove(moveName)
+        if edge.childNode is None:
+            edge.childNode = self.executeMove(moveName)
         
-        return self.childNodes[moveName]
+        return edge.childNode
     
     cdef TreeNode selectDown(self, float cpuct):
         cdef TreeNode node = self
@@ -313,17 +292,15 @@ cdef class TreeNode():
         return node
     
     cdef void backup(self, object vs):
-        if self.parentNode is not None:
-            self.parentEdge[0].visitCount += 1
-            self.parentEdge[0].totalValue += vs[self.parentNode.state.getPlayerOnTurnIndex()]
-            self.parentEdge[0].meanValue = self.parentEdge[0].totalValue / self.parentEdge[0].visitCount
-            
-            self.parentNode.allVisits += 1
-            self.parentNode.backup(vs)
+        if self.parent is not None:
+            self.parent.visitCount += 1
+            self.parent.parentNode.allVisits += 1
+            self.parent.totalValue += vs[self.parent.parentNode.state.getPlayerOnTurnIndex()]
+            self.parent.meanValue = self.parent.totalValue / self.parent.visitCount
+            self.parent.parentNode.backup(vs)
 
-    cdef void expand(self, object movePMapTensor, object vs):
-        for i in range(self.numEdges):
-            self.movePMap[i] = movePMapTensor[i]
+    cdef void expand(self, object movePMap, object vs):
+        self.movePMap = movePMap
         self.isExpanded = 1
         self.stateValue = vs[self.state.getPlayerOnTurnIndex()]
     
@@ -332,8 +309,8 @@ cdef class TreeNode():
         newState.simulate(move)
 
         cdef TreeNode result = TreeNode(newState, noiseMix = self.noiseMix)
-        result.parentEdge = self.edges + move
-        result.parentNode = self
+        result.advantagePlayerIdx = self.advantagePlayerIdx
+        result.parent = self.edges[move] 
         
         return result
     
@@ -346,12 +323,12 @@ cdef class TreeNode():
         """
         cdef float bv = 0
         cdef int i = 0
-        cdef int elen = self.numEdges
-        cdef TreeEdge* e 
+        cdef int elen = len(self.edges)
+        cdef TreeEdge e 
         for i in range(elen):
-            e = self.edges + i
-            if e[0].exists and e[0].meanValue > bv:
-                bv = e[0].meanValue
+            e = self.edges[i]
+            if e is not None and e.meanValue > bv:
+                bv = e.meanValue
         return bv
     
     def cutTree(self):
@@ -362,15 +339,10 @@ cdef class TreeNode():
         maybe instead a completely different tree should be used for each solver. But meh.
         Training does reuse the trees, test play doesn't. Better than nothing...
         """
-        for i in range(self.numEdges):
-            self.edges[i].exists = 0
-            
-        self.parentEdge = NULL
-        
-        self.childNodes = [None] * self.numEdges
-        self.parentNode = None
-            
+        self.edges = [None] * self.state.getMoveCount()
+        self.parent = None
         self.terminalResult = None
+        self.movePMap = None
         self.allVisits = 0
         self.isExpanded = 0
         
@@ -387,35 +359,33 @@ cdef class TreeNode():
         """
         assert self.isExpanded
         
-        cdef TreeEdge* edge
+        cdef TreeEdge edge
         cdef TreeNode child 
         
-        edge = self.edges + move
-        if not edge[0].exists:
-            self.parentNode = self
-            setupEdge(edge, self.movePMap[move])
+        edge = self.edges[move]
+        if edge is None:
+            edge = TreeEdge(self.movePMap[move], self)
+            self.edges[move] = edge
             
-        child = self.childNodes[move]
+        child = edge.childNode
         
         if child is None:
-            self.childNodes[move] = self.executeMove(move)
-            child = self.childNodes[move]
+            edge.childNode = self.executeMove(move)
+            child = edge.childNode
         
-        child.parentNode = None
+        child.parent = None
         return child
     
     def getMoveDistribution(self):
         cdef float sumv = float(self.allVisits)
         
-        cdef int i
-        
-        cdef int elen = self.numEdges
+        cdef int elen = len(self.edges)
         cdef object r = [0] * elen
-        cdef TreeEdge* e
+        cdef TreeEdge e
         for i in range(elen):
-            e = self.edges + i
-            if e[0].exists:
-                r[i] = e[0].visitCount / sumv
+            e = self.edges[i]
+            if e is not None:
+                r[i] = e.visitCount / sumv
         
         return r
     
