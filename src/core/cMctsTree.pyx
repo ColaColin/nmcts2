@@ -23,7 +23,7 @@ cdef int cmp_move_data(const void* a, const void *b) nogil:
         return 0
     else:
         return -1
-
+    
 cdef class TreeEdge():
     cdef int visitCount
     cdef float totalValue
