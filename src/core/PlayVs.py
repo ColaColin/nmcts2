@@ -21,7 +21,7 @@ def pickComparativeConfig(config, key):
 if __name__ == '__main__':
     mp.set_start_method("spawn")
     
-    workdir = "/MegaKeks/nmcts2/c6_19_test"
+    workdir = "/MegaKeks/nmcts2/c6_quick_check2"
     playVersion = None #"B"
     firstMove = 0
     
@@ -35,7 +35,7 @@ if __name__ == '__main__':
     if playVersion != None:
         pickComparativeConfig(config, playVersion)
     
-    initObject = object_for_class_name(config["game"]["init"]) 
+    initObject = object_for_class_name(config["game"]["init"])
     
     initObject.setConfig(config)
     

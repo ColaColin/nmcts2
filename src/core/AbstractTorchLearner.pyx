@@ -6,7 +6,6 @@ Created on Oct 27, 2017
 @author: cclausen
 '''
 
-
 import abc
 
 import torch
@@ -21,10 +20,22 @@ import time
 
 import multiprocessing as mp
 
-def fillTrainingSetPart0(gameInit, playerCount, frames, startIndex, moveOutput, winOutput, networkInput):
+import torch.cuda
+
+def fillTrainingSetPart0(gameInit, int playerCount, frames, int startIndex, moveOutput, winOutput, networkInput):
     moveOutput[startIndex : startIndex + len(frames)].fill_(0)
     winOutput[startIndex : startIndex + len(frames)].fill_(0)
     networkInput[startIndex : startIndex + len(frames)].fill_(0)
+    
+    # not doing this slow down stuff by a factor of 6x... wow
+    cdef float [:,:] moveTensor = moveOutput.numpy()
+    cdef float [:,:] winTensor = winOutput.numpy()
+    
+    cdef int fidx, idx, pid
+    cdef object frame
+    cdef float p
+    
+    cdef int pTurnIdx
     
     for fidx, frame in enumerate(frames):
         augmented = frame[0].augmentFrame(frame)
@@ -32,10 +43,11 @@ def fillTrainingSetPart0(gameInit, playerCount, frames, startIndex, moveOutput, 
         gameInit.fillNetworkInput(augmented[0], networkInput, startIndex + fidx)
         
         for idx, p in enumerate(augmented[1]):
-            moveOutput[startIndex + fidx, idx] = p
+            moveTensor[startIndex + fidx, idx] = p
         
         for pid in range(playerCount):
-            winOutput[startIndex + fidx, augmented[0].mapPlayerIndexToTurnRel(pid)] = frame[3][pid]
+            pTurnIdx = augmented[0].mapPlayerIndexToTurnRel(pid)
+            winTensor[startIndex + fidx, pTurnIdx] = frame[3][pid]
 
 class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
     def __init__(self, framesBufferSize, batchSize, epochs, lr_schedule):
@@ -101,9 +113,15 @@ class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
         """
     
     def initState(self, file):
-        self.networkInput = torch.zeros((self.framesBufferSize,) + self.getNetInputShape())
-        self.moveOutput = torch.zeros(self.framesBufferSize, self.getMoveCount())
-        self.winOutput = torch.zeros(self.framesBufferSize, self.getPlayerCount())
+        # why even have two sets of buffers? the buffers are copied into vram anyway? hmmmmmm
+        self.networkInputA = torch.zeros((self.framesBufferSize,) + self.getNetInputShape())
+        self.networkInputB = torch.zeros((self.framesBufferSize,) + self.getNetInputShape())
+        
+        self.moveOutputA = torch.zeros(self.framesBufferSize, self.getMoveCount())
+        self.moveOutputB = torch.zeros(self.framesBufferSize, self.getMoveCount())
+        
+        self.winOutputA = torch.zeros(self.framesBufferSize, self.getPlayerCount())
+        self.winOutputB = torch.zeros(self.framesBufferSize, self.getPlayerCount())
 
         self.net = self.createNetwork()
         self.opt = self.createOptimizer(self.net)
@@ -213,41 +231,52 @@ class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
 
         return results
     
-    def fillTrainingSet(self, frames):
+    def queueFillBuffers(self, pool, frames, useBufferA, threads):
         random.shuffle(frames)
         
-        self.moveOutput.fill_(0)
-        self.winOutput.fill_(0)
-        self.networkInput.fill_(0)
+        if useBufferA:
+            mo = self.moveOutputA
+            wo = self.winOutputA
+            ni = self.networkInputA
+        else:
+            mo = self.moveOutputB
+            wo = self.winOutputB
+            ni = self.networkInputB
         
-        for fidx, frame in enumerate(frames):
+        asyncs = []
+        framesPerProc = int(len(frames) / threads)
+        for i in range(threads):
+            startIndex = framesPerProc * i
+            endIndex = startIndex + framesPerProc
+            if i == threads - 1:
+                endIndex = len(frames)
             
-            augmented = frame[0].augmentFrame(frame)
-            
-            self.fillNetworkInput(augmented[0], self.networkInput, fidx)
-            
-            for idx, p in enumerate(augmented[1]):
-                self.moveOutput[fidx, idx] = p
-            
-            for pid in range(self.getPlayerCount()):
-                self.winOutput[fidx, augmented[0].mapPlayerIndexToTurnRel(pid)] = frame[3][pid]
-    
+            asyncs.append(pool.apply_async(fillTrainingSetPart0, args=(self.getGameInit(), self.getPlayerCount(), frames[startIndex:endIndex], startIndex, mo, wo, ni)))
+        
+        return asyncs
 
-#     def fillTrainingSetPart(self, frames, startIndex, moveOutput, winOutput, networkInput):
-#         moveOutput[startIndex : startIndex + len(frames)].fill_(0)
-#         winOutput[startIndex : startIndex + len(frames)].fill_(0)
-#         networkInput[startIndex : startIndex + len(frames)].fill_(0)
-#         
-#         for fidx, frame in enumerate(frames):
-#             augmented = frame[0].augmentFrame(frame)
-#             
-#             self.fillNetworkInput(augmented[0], networkInput, startIndex + fidx)
-#             
-#             for idx, p in enumerate(augmented[1]):
-#                 moveOutput[startIndex + fidx, idx] = p
-#             
-#             for pid in range(self.getPlayerCount()):
-#                 winOutput[startIndex + fidx, augmented[0].mapPlayerIndexToTurnRel(pid)] = frame[3][pid]
+    def waitForBuffers(self, useBufferA, asyncs, numFrames):
+        for asy in asyncs:
+            asy.get()
+        
+        if useBufferA:
+            mo = self.moveOutputA
+            wo = self.winOutputA
+            ni = self.networkInputA
+        else:
+            mo = self.moveOutputB
+            wo = self.winOutputB
+            ni = self.networkInputB
+        
+        assert torch.sum(ni.ne(ni)) == 0
+        assert torch.sum(mo.ne(mo)) == 0
+        assert torch.sum(wo.ne(wo)) == 0
+        
+        nIn = Variable(ni[:numFrames]).cuda()
+        mT = Variable(mo[:numFrames]).cuda()
+        wT = Variable(wo[:numFrames]).cuda()
+        
+        return nIn, mT, wT
     
     def learnFromFrames(self, frames, iteration, dbg=False, reAugmentEvery=1, threads=4):
         assert(len(frames) <= self.framesBufferSize), str(len(frames)) + "/" + str(self.framesBufferSize)
@@ -270,51 +299,17 @@ class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
         
         pool = mp.Pool(processes = threads)
         
+        useBufferA = True
+        
+        asyncs = self.queueFillBuffers(pool, frames, useBufferA, threads)
+        
         for e in range(self.epochs):
-            print("Preparing example data...")
-            if e % reAugmentEvery == 0:
-                print("Filling with augmented data")
-                
-                # self.fillTrainingSet(frames)
-                
-                asyncs = []
-                framesPerProc = int(len(frames) / threads)
-                for i in range(threads):
-                    startIndex = framesPerProc * i
-                    endIndex = startIndex + framesPerProc
-                    if i == threads - 1:
-                        endIndex = len(frames)
-                    
-                    asyncs.append(pool.apply_async(fillTrainingSetPart0, args=(self.getGameInit(), self.getPlayerCount(), frames[startIndex:endIndex], startIndex, self.moveOutput, self.winOutput, self.networkInput)))
-                
-                for asy in asyncs:
-                    asy.get()
-                
-#                 print(self.networkInput[0])
-#                 print(self.moveOutput)
-#                 print(self.winOutput)
-                
-                assert torch.sum(self.networkInput.ne(self.networkInput)) == 0
-                assert torch.sum(self.moveOutput.ne(self.moveOutput)) == 0
-                assert torch.sum(self.winOutput.ne(self.winOutput)) == 0
-                 
-                lf = len(frames)
-                nIn = Variable(self.networkInput[:lf]).cuda()
-                mT = Variable(self.moveOutput[:lf]).cuda()
-                wT = Variable(self.winOutput[:lf]).cuda()
-            else:
-                print("Shuffle last augmented data...")
-                perm = torch.randperm(len(frames)).cuda()
-                nInR = nIn.index_select(0, perm)
-                mTR = mT.index_select(0, perm)
-                wTR = wT.index_select(0, perm)
-                del nIn
-                del mT
-                del wT
-                nIn = nInR
-                mT = mTR
-                wT = wTR
-            print("Data prepared, starting to learn!")
+            pTimeStart = time.time()
+            nIn, mT, wT = self.waitForBuffers(useBufferA, asyncs, len(frames))
+            useBufferA = not useBufferA
+            asyncs = self.queueFillBuffers(pool, frames, useBufferA, threads-1)
+
+            print("Waited %f seconds for data!" % (time.time() - pTimeStart))
             
             mls = []
             wls = []
@@ -353,4 +348,6 @@ class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
         del wT
         
         pool.terminate()
+        
+        torch.cuda.empty_cache()
 

@@ -26,7 +26,7 @@ import numpy as np
 # not bad for a pure python thing
 #from core.vectorMcts import TreeNode, batchedMcts 
 
-# the best: "score of 4.37". Not yet implemented: move grouping, not sure how relevant that would still be
+# the best: "score of 4.47". Not yet implemented: move grouping, not sure how relevant that would still be
 from core.cvectorMcts import TreeNode, batchedMcts # @UnresolvedImport
 
 import random

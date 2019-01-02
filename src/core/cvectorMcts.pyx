@@ -10,9 +10,7 @@ Created on Dec 31, 2018
 # cdef TreeNode 1    : 1.69
 # by hand pickMove   : 2.46
 # q value init       : 4.37 <- different (better?!) search behavior, but the same as in cMctsTree, this was an oversight that made this one behave different (slower & worse)
-# dconst cache       : 4.5
-
-# no profiler        : 
+# dconst cache       : 4.47
 
 import numpy as np
 cimport numpy as np
@@ -105,8 +103,8 @@ cdef class TreeNode():
         self.edgeTotalValues = np.zeros(mc, dtype=np.float32)
         self.edgeMeanValues = np.zeros(mc, dtype=np.float32)
         self.valueTmp = np.zeros(mc, dtype=np.float32)
-        self.edgeLegal = np.zeros(mc, dtype=np.int8)
         
+        self.edgeLegal = np.zeros(mc, dtype=np.int8)
         cdef int m
         for m in range(self.numMoves):
             if self.state.isMoveLegal(m):
@@ -148,7 +146,7 @@ cdef class TreeNode():
         for i in range(self.numMoves):
             self.edgePriors[i] = 0
             self.edgeVisits[i] = 0
-            self.egdeTotalValues[i] = 0
+            self.edgeTotalValues[i] = 0
             self.edgeMeanValues[i] = 0
        
         self.stateValue = 0.5
