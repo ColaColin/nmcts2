@@ -187,6 +187,7 @@ class TreeFrameGenerator():
                                 ancestor[3] = (ancestor[3]) / (np.sum(ancestor[3]) + eps)
                                 if depth <= nextState.state.getPlayerCount() or ancestor[5] > 1:
                                     finalizedFrames.append(ancestor[:4])
+                                    
                                     if nextState.state.getWinner() == -1:
                                         drawCount += 1
 
@@ -203,6 +204,35 @@ class TreeFrameGenerator():
         
         return finalizedFrames
 
+def padRight(sx, n):
+    while len(sx) < n:
+        sx = sx + " "
+    return sx
+    
+def alignStringBlocks(blockA, blockB):
+    blockA = blockA.splitlines()
+    blockB = blockB.splitlines()
+    
+    maxLen = max(max([len(x) for x in blockA]), max([len(x) for x in blockB]))
+    
+    lineNum = max([len(blockA), len(blockB)])
+    
+    result = ""
+    
+    for i in range(lineNum):
+        a = ""
+        b = ""
+        if len(blockA) > i:
+            a = blockA[i]
+        if len(blockB) > i:
+            b = blockB[i]
+        result += str(padRight(a, maxLen))
+        result += "   "
+        result += str(padRight(b, maxLen))
+        result += "\n"
+    
+    return result
+    
 
 def getBestNArgs(n, array):
     if len(array) < n:
@@ -224,13 +254,18 @@ def getBestNArgs(n, array):
     
     return result
 
+def softmax(x):
+    """Compute softmax values for each sets of scores in x."""
+    e_x = np.exp(x - np.max(x))
+    return e_x / e_x.sum()
+
 class NeuralMctsPlayer():
     def __init__(self, stateTemplate, config, learner):
         self.config = config
         self.stateTemplate = stateTemplate.clone()
         self.mctsExpansions = config["learning"]["mctsExpansions"] # a value of 1 here will make it basically play by the network probabilities in a greedy way #TODO test that
         self.learner = learner
-        self.cpuct = 0.5424242 #hmm TODO: investigate the influence of this factor on the speed of learning
+        self.cpuct = 1.5424242 #hmm TODO: investigate the influence of this factor on the speed of learning
         self.batchMctsCalls = 0
         self.batchMctsTime = 0
         self.lastBatchMctsBenchmarkTime = time.time()
@@ -246,6 +281,60 @@ class NeuralMctsPlayer():
         a[:], b[:] = zip(*combined)
 
     def _pickMoves(self, count, moveP, state, explore=False):
+        ms = []
+        ps = []
+        psum = 0.0
+        possibleMoves = 0
+        hasBetterThanXMoves = False
+        x = 0.02
+        eps = 0.0000001
+        for idx, p in enumerate(moveP):
+            if state.isMoveLegal(idx) and p > 0:
+                possibleMoves += 1
+                
+                psum += p + eps
+                
+                ms.append(idx)
+                ps.append(p + eps)
+
+        assert len(ms) > 0, "The state should have legal moves that were considered"
+        
+        if possibleMoves <= count:
+            return ms
+
+        self.shuffleTogether(ms, ps)
+
+        for idx in range(len(ps)):
+            ps[idx] /= float(psum)
+            
+            if ps[idx] > x:
+                hasBetterThanXMoves = True
+        
+        if explore:
+            if hasBetterThanXMoves:
+                psum = 0
+                for idx in range(len(ps)):
+                    if ps[idx] < x:
+                        if count > 1:
+                            ps[idx] = eps
+                        else:
+                            ps[idx] = 0
+                    psum += ps[idx]
+                    
+                for idx in range(len(ps)):
+                    ps[idx] /= float(psum)
+                    
+            m = np.random.choice(ms, count, replace=False, p = ps)
+        else:
+            if count > 1:
+                m = []
+                for arg in getBestNArgs(count, ps):
+                    m.append(ms[arg])
+            else:
+                m = [ms[np.argmax(ps)]]
+        return m
+
+    def _pickMovesY(self, count, moveP, state, explore=False):
         ms = []
         ps = []
         psum = 0.0
@@ -417,31 +506,52 @@ class NeuralMctsPlayer():
             batch.append(TreeNode(initialGameState))
             bframes.append([])
         
+        gamesPlayed = 0
+        
         while len(frames) < n:
-            print("Begin batch")
-            t = time.time()
-            self.batchMcts(batch, useAdvantagePlayer = True)
-            print("Batch complete in %f" % (time.time() - t))
+            #print("Begin batch")
+            #t = time.time()
+            self.batchMcts(batch, useAdvantagePlayer = False)
+            #print("Batch complete in %f" % (time.time() - t))
             
             for idx in range(batchSize):
                 b = batch[idx]
-                if b == None:
-                    continue
+                assert b != None
                 md = b.getMoveDistribution()
                 if b.state.getTurn() > 0:
-                    bframes[idx].append([b.state.getFrameClone(), md, b.getBestValue()])
+                    bframes[idx].append([b.state.getFrameClone(), md, b.getBestValue(), b.getEdgePriors(), b.getNetValueEvaluation()])
+
                 mv = self._pickMoves(1, md, b.state, b.state.isEarlyGame())[0]
                 b = b.getChildForMove(mv)
                 
                 if b.state.isTerminal():
+                    printGame = gamesPlayed % 50 == 0
+                    
+                    gamesPlayed += 1
+                    termResult = b.getTerminalResult()
+                    
+                    if printGame:
+                        dStr = "Completed game " + str(gamesPlayed) + ", it went as follows with win target " + str(termResult) + "\n" 
+                    
                     for f in bframes[idx]:
-                        if keepFramesPerc == 1.0 or random.random() < keepFramesPerc:
-                            frames.append(f + [b.getTerminalResult()])
+                        frames.append(f[:-2] + [b.getTerminalResult()])
+                        ancestor = frames[-1]
+                        
+                        if printGame:
+                            treeSearchChoices = "Improved moves\n" + ancestor[0].moveProbsAndDisplay(ancestor[1])
+                            netChoices = "Network moves, Network values are " + str(f[-1]) + "\n" + ancestor[0].moveProbsAndDisplay(f[-2])
+                            sframe = alignStringBlocks(treeSearchChoices, netChoices) + "\n"
+                            dStr += sframe
+                    
+                    if printGame:
+                        print(dStr)
+                    
                     bframes[idx] = []
-                    batch[idx] = TreeNode(self.stateTemplate.getNewGame(), useAdvantagePlayer = True)
+                    batch[idx] = TreeNode(self.stateTemplate.getNewGame())
                 else:
                     batch[idx] = b
                 
+        print("Completed %i games" % gamesPlayed)
                 
         torch.cuda.empty_cache()
         return frames

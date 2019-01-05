@@ -314,6 +314,8 @@ class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
             mls = []
             wls = []
             
+            bTimeStart = time.time()
+            
             for bi in range(batchNum):
                 x = nIn[bi*self.batchSize : (bi+1) * self.batchSize]
                 yM = mT[bi*self.batchSize : (bi+1) * self.batchSize]
@@ -339,7 +341,7 @@ class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
                 mls.append(mLoss.data.item())
                 wls.append(wLoss.data.item())
                 
-            print("Completed Epoch %i with loss %f + %f" % (e, np.mean(mls), np.mean(wls)))
+            print("Completed Epoch %i with loss %f + %f in %f seconds" % (e, np.mean(mls), np.mean(wls)), time.time() - bTimeStart)
         
         self.net.train(False)
         

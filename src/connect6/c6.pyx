@@ -13,6 +13,9 @@ import random
 
 # todo put the field handling in another pyx file and figure out how to organize compilation
 
+# WHITE is player index 1
+# BLACK is player index 0
+
 cdef inline float readFloatField(float* f, int m, int x, int y):
     return f[y * m + x];
 
@@ -266,7 +269,8 @@ cdef inline signed char getPlayerIndexOnTurnC6(Connect6_c* c6):
         return ((c6.turn-1)/2) % 2
 
 cdef inline int hasEndedC6(Connect6_c* c6):
-    return c6.winningPlayer != -1 or c6.turn >= c6.m * c6.n; 
+    # games are drawn once 2/3 of the field are filled with stones
+    return c6.winningPlayer != -1 or c6.turn >= (c6.m * c6.n) * 0.67; 
 
 cdef void _searchWinnerC6(Connect6_c* c6, int lx, int ly):
     if c6.winningPlayer != -1:
@@ -346,6 +350,64 @@ cdef class Connect6State:
     
     def __str__(self):
         return toStringC6(self.c6)
+    
+    def moveProbsAndDisplay(self, mp):
+        mm = ['.', '█', '░']
+        m = self.c6.m
+        n = self.c6.n
+        c6 = self.c6
+        s = "Connect6(%i,%i), " %  (c6.m, c6.n)
+        if hasEndedC6(c6) == 0:
+            s += "Turn %i: %s\n" % (c6.turn, mm[getPlayerIndexOnTurnC6(c6)+1])
+        elif c6.winningPlayer > -1:
+            s += "Winner: %s\n" % mm[c6.winningPlayer+1]
+        else:
+            s += "Draw\n"
+        
+        def getPDisplay(x, y):
+            mkey = self.getMoveKey(x, y)
+            m = mp[mkey]
+            m *= 100
+            if m > 0.1 and m < 1:
+                m = 1
+            stone = readField(self.c6.board, self.c6.m, x, y)+1
+            if int(m) == 0 or stone > 0:
+                return " " + mm[stone] + "  "
+            else:
+                m = str(int(m))
+                m = " " + m
+                while len(m) < 4:
+                    m += " "
+                return m
+        
+        s += "   |"
+        for x in range(m):
+            if x < 9:
+                s += " %i |" % (x+1)
+            else:
+                s += "%i |" % (x+1)
+        
+        s += "\n";
+        
+        chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        
+        assert n <= len(chars)
+        
+        for y in range(n):
+            for _ in range(m+1):
+                s += "    ";
+            s += "\n";
+            s += " " + chars[y] + "  ";
+            for x in range(m):
+                
+                
+                s += getPDisplay(x, y);
+            s += "\n";
+        for _ in range(m+1):
+            s += "    ";
+        s += "\n";
+        
+        return s;
     
     def getMoveLocation(self, key):
         y = int(key / self.c6.m)
@@ -546,6 +608,11 @@ def stateFormat(state):
 cdef void fillNetworkInput0(Connect6State state, float[:,:,:,:] tensor, int batchIndex):
     cdef int x, y, b
     cdef Connect6_c* c6 = state.c6
+
+    cdef float evenTurn = -1
+    
+    if state.getTurn() % 2 == 0:
+        evenTurn = 1
     
     for y in range(c6.n):
         for x in range(c6.m):
@@ -553,6 +620,7 @@ cdef void fillNetworkInput0(Connect6State state, float[:,:,:,:] tensor, int batc
             if b != -1:
                 b = state.mapPlayerIndexToTurnRel(b)
             tensor[batchIndex,0,y,x] = b
+            tensor[batchIndex,1,y,x] = evenTurn
 
 class Connect6Init():
     def __init__(self):
@@ -576,7 +644,7 @@ class Connect6Init():
         return self.m * self.n
     
     def getGameDimensions(self):
-        return [self.m, self.n, 1]
+        return [self.m, self.n, 2]
     
     def fillNetworkInput(self, Connect6State state, object torchTensor, int batchIndex):
         cdef float [:, :, :, :] tensor = torchTensor.numpy()

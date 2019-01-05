@@ -80,6 +80,8 @@ cdef class TreeNode():
 
     cdef float stateValue
     cdef int allVisits
+    
+    cdef object netValueEvaluation
 
     def __init__(self, state, parentNode = None, parentMove = 0, noiseMix = 0.1):
         self.state = state
@@ -120,6 +122,15 @@ cdef class TreeNode():
         newState = self.state.clone()
         newState.simulate(move)
         return TreeNode(newState, self, parentMove = move, noiseMix = self.noiseMix)
+    
+
+    def exportTree(self):
+        """
+        create an independent data structure that describes the entire tree 
+        that starts at this node, meant for storage and later analysis
+        """
+        
+    
     
     def getBestValue(self):
         """
@@ -178,8 +189,11 @@ cdef class TreeNode():
         child.parentNode = None
         return child
     
+    def getEdgePriors(self):
+        return np.copy(np.asarray(self.edgePriors, dtype=np.float32))
+    
     def getMoveDistribution(self):
-        return np.asarray(self.edgeVisits) / float(self.allVisits)
+        return np.asarray(self.edgeVisits, dtype=np.float32) / float(self.allVisits)
     
     cdef int pickMove(self, float cpuct):
         cdef int useNoise = self.allVisits < 5
@@ -194,7 +208,7 @@ cdef class TreeNode():
             dirNoise = np.random.dirichlet(self.dconst).astype(np.float32)
         
         cdef float vFactor = self.getVisitsFactor() 
-        
+
         for i in range(self.numMoves):
             if self.edgeLegal[i] == 1:
                 if useNoise:
@@ -210,6 +224,7 @@ cdef class TreeNode():
                     nodeQ = self.edgeMeanValues[i]
                     
                 nodeU = self.valueTmp[i] * (vFactor / (1.0 + self.edgeVisits[i]))
+                
                 self.valueTmp[i] = nodeQ + cpuct * nodeU
             else:
                 self.valueTmp[i] = illegalMoveValue
@@ -252,7 +267,11 @@ cdef class TreeNode():
     cdef void expand(self, object movePMap, object vs):
         np.copyto(np.asarray(self.edgePriors), movePMap, casting="no")
         self.isExpanded = 1
+        self.netValueEvaluation = np.array(vs)
         self.stateValue = vs[self.state.getPlayerOnTurnIndex()]
+    
+    def getNetValueEvaluation(self):
+        return self.netValueEvaluation
     
 def batchedMcts(object states, int expansions, evaluator, float cpuct):
     workspace = states

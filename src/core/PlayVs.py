@@ -3,7 +3,6 @@ Created on Apr 4, 2018
 
 @author: cclausen
 '''
-
 import multiprocessing as mp
 import os
 
