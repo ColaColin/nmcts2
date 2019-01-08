@@ -265,7 +265,7 @@ class NeuralMctsPlayer():
         self.stateTemplate = stateTemplate.clone()
         self.mctsExpansions = config["learning"]["mctsExpansions"] # a value of 1 here will make it basically play by the network probabilities in a greedy way #TODO test that
         self.learner = learner
-        self.cpuct = 1.5424242 #hmm TODO: investigate the influence of this factor on the speed of learning
+        self.cpuct = 2
         self.batchMctsCalls = 0
         self.batchMctsTime = 0
         self.lastBatchMctsBenchmarkTime = time.time()
@@ -555,6 +555,29 @@ class NeuralMctsPlayer():
                 
         torch.cuda.empty_cache()
         return frames
+        
+    # play one game like in training, print out the game with probs 'n' stuff, return a package of all states encountered that contains detailed info on the 
+    # search trees used for each step to debug them
+    def recordDemoGame(self):
+        trees = []
+        
+        gameNode = TreeNode(self.stateTemplate.getNewGame())
+        
+        while not gameNode.state.isTerminal():
+            self.batchMcts([gameNode])
+            trees.append(gameNode.exportTree())
+            
+            md = gameNode.getMoveDistribution()
+            mv = self._pickMoves(1, md, gameNode.state, gameNode.state.isEarlyGame())[0]
+            
+            leftPart = "Improved moves\n" + gameNode.state.moveProbsAndDisplay(md)
+            rightPart = "Network moves, Network values are " + str(gameNode.getNetValueEvaluation()) + "\n" + gameNode.state.moveProbsAndDisplay(gameNode.getEdgePriors())
+            
+            print(alignStringBlocks(leftPart, rightPart))
+            
+            gameNode = gameNode.getChildForMove(mv)
+        
+        return trees
         
     def playAgainst(self, n, batchSize, others, collectFrames=False):
         """

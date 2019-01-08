@@ -122,15 +122,37 @@ cdef class TreeNode():
         newState = self.state.clone()
         newState.simulate(move)
         return TreeNode(newState, self, parentMove = move, noiseMix = self.noiseMix)
-    
 
     def exportTree(self):
         """
         create an independent data structure that describes the entire tree 
         that starts at this node, meant for storage and later analysis
         """
+        me = {}
+        me["state"] = self.state.packageForDebug()
+        me["expanded"] = self.isExpanded
+        me["winner"] = self.state.getWinner()
+        me["priors"] = np.asarray(self.edgePriors).tolist()
+        me["netValue"] = np.asarray(self.netValueEvaluation).tolist()
+
+        edges = {}
         
-    
+        cdef int move
+        
+        for move in self.children:
+            child = self.children[move]
+            e = {}
+            e["move"] = self.state.getHumanMoveDescription(move)
+            e["tree"] = child.exportTree()
+            e["visits"] = self.edgeVisits[move]
+            e["totalValue"] = self.edgeTotalValues[move]
+            e["meanValue"] = self.edgeMeanValues[move]
+            
+            edges[move] = e
+
+        me["edges"] = edges
+        
+        return me
     
     def getBestValue(self):
         """
@@ -196,7 +218,7 @@ cdef class TreeNode():
         return np.asarray(self.edgeVisits, dtype=np.float32) / float(self.allVisits)
     
     cdef int pickMove(self, float cpuct):
-        cdef int useNoise = self.allVisits < 5
+        cdef int useNoise = self.parentNode == None and np.random.rand() < 0.42
         
         cdef int i
 
@@ -209,6 +231,8 @@ cdef class TreeNode():
         
         cdef float vFactor = self.getVisitsFactor() 
 
+        cdef float bestKnownEdgeMeanValue = np.max(self.edgeMeanValues)
+
         for i in range(self.numMoves):
             if self.edgeLegal[i] == 1:
                 if useNoise:
@@ -218,8 +242,12 @@ cdef class TreeNode():
                 
                 # not using an initialization of zero is a pretty good idea.
                 # not only for search quality (to be proven) but also for search speed by like 50%
+                # zero may be bad, stateValue is far worse! That means that especially for very clear cut
+                # situations the tree search will start to extensively explore bad plays to the point of diminishing the winning play probability quite considerably.
                 if self.edgeVisits[i] == 0:
-                    nodeQ = self.stateValue
+                    # idea: if the current position is expected to be really good: Follow the network
+                    # if the current position is expected to be really bad: explore more, especially if all known options are bad
+                    nodeQ = self.stateValue * self.edgePriors[i] + (1 - self.stateValue) * (1 - bestKnownEdgeMeanValue)
                 else:
                     nodeQ = self.edgeMeanValues[i]
                     

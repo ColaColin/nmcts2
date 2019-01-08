@@ -348,6 +348,29 @@ cdef class Connect6State:
         self.c6 = pickleUnpackC6(d)
         self.initId()
     
+    def packageForDebug(self):
+        package = {}
+        package["m"] = self.c6.m
+        package["n"] = self.c6.n
+        package["turn"] = self.c6.turn
+        package["onturn"] = getPlayerIndexOnTurnC6(self.c6)
+        
+        board = []
+        
+        for y in range(self.c6.n):
+            l = []
+            for x in range(self.c6.m):
+                l.append(readField(self.c6.board, self.c6.m, x, y))
+            board.append(l)
+        
+        package["board"] = board
+        return package
+
+    def getHumanMoveDescription(self, mkey):
+        x, y = self.getMoveLocation(mkey)
+        chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        return str(x+1) + "-" + chars[y] 
+    
     def __str__(self):
         return toStringC6(self.c6)
     
@@ -399,8 +422,6 @@ cdef class Connect6State:
             s += "\n";
             s += " " + chars[y] + "  ";
             for x in range(m):
-                
-                
                 s += getPDisplay(x, y);
             s += "\n";
         for _ in range(m+1):

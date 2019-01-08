@@ -129,6 +129,8 @@ def runSingleTraining(workdir):
    
     config = openJson(os.path.join(workdir, "config.json"))
     
+    print(config['explanation'])
+    
     initObject = object_for_class_name(config["game"]["init"]) 
     initObject.setConfig(config)
     

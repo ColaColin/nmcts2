@@ -14,4 +14,11 @@
 	<natures>
 		<nature>org.python.pydev.pythonNature</nature>
 	</natures>
+	<linkedResources>
+		<link>
+			<name>nmcts</name>
+			<type>2</type>
+			<location>/ImbaKeks/nmcts</location>
+		</link>
+	</linkedResources>
 </projectDescription>

@@ -259,7 +259,7 @@ class NeuralMctsTrainer():
         
         print("Done learning in %f" % (time.time() - t))
 
-    def load(self):
+    def load(self, loadFrames = True):
         spath = os.path.join(self.workingdir, "status.json")
         if (os.path.exists(spath)):
             status = openJson(spath)
@@ -279,7 +279,7 @@ class NeuralMctsTrainer():
             self.learner.learner.initState(lPath)
         
         fPath = os.path.join(self.workingdir, "frameHistory"+ str(status["iteration"]) +".pickle")
-        if os.path.exists(fPath):
+        if os.path.exists(fPath) and loadFrames:
             with open(fPath, "rb") as f:
                 self.frameHistory = pickle.load(f)
                 print("Loaded %i frames " % len(self.frameHistory))
