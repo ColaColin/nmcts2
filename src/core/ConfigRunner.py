@@ -62,6 +62,9 @@ class ConfigLearner(AbstractTorchLearner):
     def getPlayerCount(self):
         return self.gameInit.getPlayerCount()
     
+    def hasDraws(self):
+        return self.gameInit.hasDraws()
+    
     def getMoveCount(self):
         return self.gameInit.getMoveCount()
     
@@ -69,10 +72,15 @@ class ConfigLearner(AbstractTorchLearner):
         netc = self.config["network"] 
         if (netc["type"] == "ResNet"):
             dims = self.gameInit.getGameDimensions()
+            
+            numOutputs = self.getPlayerCount()
+            if self.hasDraws():
+                numOutputs += 1
+            
             result = ResCNN(dims[0], dims[1], dims[2], 
                           netc["firstBlockKernelSize"], netc["firstBlockFeatures"], 
                           netc["blockFeatures"], netc["blocks"], self.getMoveCount(), 
-                          self.getPlayerCount())
+                          numOutputs)
             
             print("Created a network with %i parameters" % count_parameters(result))
            
@@ -129,7 +137,8 @@ def runSingleTraining(workdir):
    
     config = openJson(os.path.join(workdir, "config.json"))
     
-    print(config['explanation'])
+    if 'explanation' in config:
+        print(config['explanation'])
     
     initObject = object_for_class_name(config["game"]["init"]) 
     initObject.setConfig(config)
@@ -191,8 +200,7 @@ if __name__ == '__main__':
     #workdir = "/MegaKeks/nmcts2/c6_13_compare_8"
     #runComparativeTraining(workdir)
 
-    #workdir = "/MegaKeks/nmcts2/c6_19_test"
-    workdir = "/ImbaKeks/nmcts/newQInit"
+    workdir = "/MegaKeks/nmcts2/c6_quick_check2"
     runSingleTraining(workdir)
     
     

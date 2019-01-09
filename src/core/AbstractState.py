@@ -119,5 +119,6 @@ class AbstractState(metaclass=abc.ABCMeta):
         """
         return playerIndex -> playerIndex relative to current turn 
         """
+        assert False, "this is not really used?!"
         pc = self.getPlayerCount()
         return (playerIndex - (self.getTurn() % pc)) % pc

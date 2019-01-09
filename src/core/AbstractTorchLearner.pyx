@@ -113,15 +113,19 @@ class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
         """
     
     def initState(self, file):
+        pCount = self.getPlayerCount()
+        if self.hasDraws():
+            pCount += 1
+        
         # why even have two sets of buffers? the buffers are copied into vram anyway? hmmmmmm
         self.networkInputA = torch.zeros((self.framesBufferSize,) + self.getNetInputShape())
-        self.networkInputB = torch.zeros((self.framesBufferSize,) + self.getNetInputShape())
+        #self.networkInputB = torch.zeros((self.framesBufferSize,) + self.getNetInputShape())
         
         self.moveOutputA = torch.zeros(self.framesBufferSize, self.getMoveCount())
-        self.moveOutputB = torch.zeros(self.framesBufferSize, self.getMoveCount())
+        #self.moveOutputB = torch.zeros(self.framesBufferSize, self.getMoveCount())
         
-        self.winOutputA = torch.zeros(self.framesBufferSize, self.getPlayerCount())
-        self.winOutputB = torch.zeros(self.framesBufferSize, self.getPlayerCount())
+        self.winOutputA = torch.zeros(self.framesBufferSize, pCount)
+        #self.winOutputB = torch.zeros(self.framesBufferSize, pCount)
 
         self.net = self.createNetwork()
         self.opt = self.createOptimizer(self.net)
@@ -209,6 +213,8 @@ class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
         moveP = torch.exp(moveP)
         
         cdef int pcount = state.getPlayerCount()
+        if state.hasDraws():
+            pcount += 1
         cdef int pid
         
         results = []
@@ -251,7 +257,10 @@ class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
             if i == threads - 1:
                 endIndex = len(frames)
             
-            asyncs.append(pool.apply_async(fillTrainingSetPart0, args=(self.getGameInit(), self.getPlayerCount(), frames[startIndex:endIndex], startIndex, mo, wo, ni)))
+            pCount = self.getPlayerCount()
+            if self.hasDraws():
+                pCount += 1
+            asyncs.append(pool.apply_async(fillTrainingSetPart0, args=(self.getGameInit(), pCount, frames[startIndex:endIndex], startIndex, mo, wo, ni)))
         
         return asyncs
 
@@ -306,7 +315,7 @@ class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
         for e in range(self.epochs):
             pTimeStart = time.time()
             nIn, mT, wT = self.waitForBuffers(useBufferA, asyncs, len(frames))
-            useBufferA = not useBufferA
+#             useBufferA = not useBufferA
             asyncs = self.queueFillBuffers(pool, frames, useBufferA, threads-1)
 
             print("Waited %f seconds for data!" % (time.time() - pTimeStart))

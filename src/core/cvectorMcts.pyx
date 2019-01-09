@@ -20,6 +20,10 @@ ctypedef np.float32_t DTYPE_t
 
 from libc.stdlib cimport rand, RAND_MAX
 
+
+# TODO this should be part of the config....
+cdef float DRAW_VALUE = 0.1 # 1 means draws are considered just as good as wins, 0 means draws are considered as bad as losses
+
 # negative values should be not possible for moves in general?!
 cdef float illegalMoveValue = -1
 
@@ -329,18 +333,28 @@ cdef class TreeNode():
             pNode.edgeVisits[pMove] += 1
             pNode.allVisits += 1
             pNode.edgeTotalValues[pMove] += vs[pNode.state.getPlayerOnTurnIndex()]
+            if pNode.state.hasDraws():
+                pNode.edgeTotalValues[pMove] += vs[self.state.getPlayerCount()] * DRAW_VALUE
             pNode.edgeMeanValues[pMove] = float(pNode.edgeTotalValues[pMove]) / pNode.edgeVisits[pMove]
             pNode.backup(vs)
     
     def getTerminalResult(self):
         if self.terminalResult is None:
-            r = [0] * self.state.getPlayerCount()
+            numOutputs = self.state.getPlayerCount()
+            if self.state.hasDraws():
+                numOutputs += 1
+                
+            r = [0] * numOutputs
             winner = self.state.getWinner()
             if winner != -1:
                 r[winner] = 1
             else:
-                r = [1.0 / self.state.getPlayerCount()] * self.state.getPlayerCount()
+                if self.state.hasDraws():
+                    r[numOutputs-1] = 1
+                else:
+                    r = [1.0 / self.state.getPlayerCount()] * self.state.getPlayerCount()
             self.terminalResult = r
+
         return self.terminalResult
     
     cdef void expand(self, object movePMap, object vs):
@@ -348,6 +362,8 @@ cdef class TreeNode():
         self.isExpanded = 1
         self.netValueEvaluation = np.array(vs)
         self.stateValue = vs[self.state.getPlayerOnTurnIndex()]
+        if (self.state.hasDraws()):
+            self.stateValue += vs[self.state.getPlayerCount()] * DRAW_VALUE
     
     def getNetValueEvaluation(self):
         return self.netValueEvaluation

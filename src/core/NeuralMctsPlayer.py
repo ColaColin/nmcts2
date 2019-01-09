@@ -286,7 +286,7 @@ class NeuralMctsPlayer():
         psum = 0.0
         possibleMoves = 0
         hasBetterThanXMoves = False
-        x = 0.02
+        x = 0.1
         eps = 0.0000001
         for idx, p in enumerate(moveP):
             if state.isMoveLegal(idx) and p > 0:
@@ -580,7 +580,6 @@ class NeuralMctsPlayer():
             print(alignStringBlocks(leftPart, rightPart))
             
             gameNode = gameNode.getChildForMove(mv)
-            print(gameNode.getTreeDepth())
         
         return trees
         

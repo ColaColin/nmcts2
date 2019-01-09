@@ -537,6 +537,9 @@ cdef class Connect6State:
         """
         return 2
     
+    def hasDraws(self):
+        return True
+    
     def getMoveCount(self):
         """
         returns the number of moves a player can make, including currently illegal moves (TODO: why include that?)
@@ -657,6 +660,11 @@ cdef class Connect6State:
         """
         return playerIndex -> playerIndex relative to current turn 
         """
+        
+        # draw index is a fixed point
+        if playerIndex == 2:
+            return 2
+        
         onTurnIdx = getPlayerIndexOnTurnC6(self.c6)
         if onTurnIdx == playerIndex:
             return 0
@@ -700,6 +708,9 @@ class Connect6Init():
     
     def getPlayerCount(self):
         return 2
+    
+    def hasDraws(self):
+        return True
     
     def getMoveCount(self):
         return self.m * self.n
