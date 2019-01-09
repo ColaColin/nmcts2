@@ -76,6 +76,8 @@ cdef class TreeNode():
     cdef signed char [:] edgeLegal
     cdef float [:] valueTmp
 
+    cdef float[:] noiseCache
+
     cdef object terminalResult
 
     cdef float stateValue
@@ -113,6 +115,8 @@ cdef class TreeNode():
                 self.edgeLegal[m] = 1
         
         self.terminalResult = None
+        
+        self.noiseCache = None
         
         self.stateValue = 0.5
         
@@ -218,16 +222,14 @@ cdef class TreeNode():
         return np.asarray(self.edgeVisits, dtype=np.float32) / float(self.allVisits)
     
     cdef int pickMove(self, float cpuct):
-        cdef int useNoise = self.parentNode == None and np.random.rand() < 0.42
+        cdef int useNoise = self.parentNode == None
         
         cdef int i
 
-        cdef float [:] dirNoise
-
         cdef float nodeQ, nodeU
 
-        if useNoise:
-            dirNoise = np.random.dirichlet(self.dconst).astype(np.float32)
+        if useNoise and self.noiseCache is None:
+            self.noiseCache = np.random.dirichlet(self.dconst).astype(np.float32)
         
         cdef float vFactor = self.getVisitsFactor() 
 
@@ -236,7 +238,7 @@ cdef class TreeNode():
         for i in range(self.numMoves):
             if self.edgeLegal[i] == 1:
                 if useNoise:
-                    self.valueTmp[i] = (1 - self.noiseMix) * self.valueTmp[i] + self.noiseMix * dirNoise[i]
+                    self.valueTmp[i] = (1 - self.noiseMix) * self.edgePriors[i] + self.noiseMix * self.noiseCache[i]
                 else:
                     self.valueTmp[i] = self.edgePriors[i]
                 

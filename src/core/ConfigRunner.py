@@ -192,7 +192,7 @@ if __name__ == '__main__':
     #runComparativeTraining(workdir)
 
     #workdir = "/MegaKeks/nmcts2/c6_19_test"
-    workdir = "/ImbaKeks/nmcts/tmp"
+    workdir = "/ImbaKeks/nmcts/newQInit"
     runSingleTraining(workdir)
     
     
