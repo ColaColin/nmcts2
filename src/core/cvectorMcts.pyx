@@ -23,6 +23,14 @@ from libc.stdlib cimport rand, RAND_MAX
 # negative values should be not possible for moves in general?!
 cdef float illegalMoveValue = -1
 
+cdef int hasAncestor(TreeNode child, TreeNode ancestor):
+    if child == ancestor:
+        return 1
+    for pNode, _ in child.parentNodes:
+        if hasAncestor(pNode, ancestor):
+            return 1
+    return 0
+
 cdef int bestLegalValue(float [:] ar):
     cdef int n = ar.shape[0]
     
@@ -63,10 +71,12 @@ cdef class TreeNode():
     
     cdef object dconst
     
-    cdef int parentMove
-    cdef TreeNode parentNode
+    cdef object parentNodes
 
     cdef object children
+    
+    cdef int useNodeRepository
+    cdef object nodeRepository
     
     cdef int numMoves
     cdef float [:] edgePriors
@@ -85,16 +95,23 @@ cdef class TreeNode():
     
     cdef object netValueEvaluation
 
-    def __init__(self, state, parentNode = None, parentMove = 0, noiseMix = 0.1):
+    def __init__(self, state, parentNodes = [], noiseMix = 0.1, nodeRepository = None, useNodeRepository = True):
         self.state = state
         cdef int mc = self.state.getMoveCount()
+    
+        self.useNodeRepository = useNodeRepository
+    
+        if self.useNodeRepository:
+            if nodeRepository is None:
+                self.nodeRepository = {}
+            else:
+                self.nodeRepository = nodeRepository
     
         self.noiseMix = noiseMix
         
         self.isExpanded = 0
         
-        self.parentMove = parentMove
-        self.parentNode = parentNode
+        self.parentNodes = parentNodes
         
         self.children = {}
         
@@ -123,9 +140,22 @@ cdef class TreeNode():
         self.allVisits = 0
     
     cdef TreeNode executeMove(self, int move):
-        newState = self.state.clone()
+        cdef object newState = self.state.clone()
         newState.simulate(move)
-        return TreeNode(newState, self, parentMove = move, noiseMix = self.noiseMix)
+        
+        cdef TreeNode knownNode
+        
+        if self.useNodeRepository and newState in self.nodeRepository:
+            knownNode = self.nodeRepository[newState]
+            knownNode.parentNodes.append((self, move))
+            return knownNode
+        
+        cdef TreeNode newNode = TreeNode(newState, [(self, move)], noiseMix = self.noiseMix, nodeRepository = self.nodeRepository, useNodeRepository = self.useNodeRepository) 
+        
+        if self.useNodeRepository:
+            self.nodeRepository[newState] = newNode
+        
+        return newNode
 
     def exportTree(self):
         """
@@ -172,13 +202,15 @@ cdef class TreeNode():
         meant to be used when different solvers are used in an alternating fashion on the same tree.
         maybe instead a completely different tree should be used for each solver. But meh.
         Training does reuse the trees, test play doesn't. Better than nothing...
+        
+        TODO Why even have a function like this, instead of just grabbing the game state and creating a new root node around it?!
         """
         
         self.children = {}
         self.isExpanded = 0
-        self.parentMove = 0
-        self.parentNode = None
+        self.parentNodes = []
         self.terminalResult = None
+        self.nodeRepository = {}
         
         for i in range(self.numMoves):
             self.edgePriors[i] = 0
@@ -192,7 +224,7 @@ cdef class TreeNode():
     cdef float getVisitsFactor(self):
         # .0001 means that in the case of a new node with zero visits it will chose whatever has the best P
         # instead of just the move with index 0
-        # but there is little effkedect in other cases
+        # but there is little effect in other cases
         return self.allVisits ** 0.5 + 0.0001
 
     cdef TreeNode selectDown(self, float cpuct):
@@ -200,7 +232,12 @@ cdef class TreeNode():
         while node.isExpanded and not node.state.isTerminal():
             node = node.selectMove(cpuct)
         return node
-        
+    
+    def getTreeDepth(self):
+        if len(self.children) == 0:
+            return 1
+        return max([self.children[ckey].getTreeDepth() for ckey in self.children]) + 1 
+    
     def getChildForMove(self, int move):
         assert self.isExpanded
         
@@ -212,7 +249,19 @@ cdef class TreeNode():
         else:
             child = self.children[move]
             
-        child.parentNode = None
+        child.parentNodes = []
+        
+        cdef TreeNode cached
+        
+        if self.useNodeRepository:
+            cKeys = list(self.nodeRepository.keys())
+            for childKey in cKeys:
+                cached = self.nodeRepository[childKey]
+                if not hasAncestor(cached, child):
+                    del self.nodeRepository[childKey]
+                    cached.parentNodes = []
+                    cached.children = {}
+        
         return child
     
     def getEdgePriors(self):
@@ -222,7 +271,7 @@ cdef class TreeNode():
         return np.asarray(self.edgeVisits, dtype=np.float32) / float(self.allVisits)
     
     cdef int pickMove(self, float cpuct):
-        cdef int useNoise = self.parentNode == None
+        cdef int useNoise = len(self.parentNodes) == 0
         
         cdef int i
 
@@ -274,9 +323,9 @@ cdef class TreeNode():
     
     cdef void backup(self, object vs):
         cdef int pMove
-        cdef TreeNode pNode = self.parentNode
-        if pNode != None:
-            pMove = self.parentMove
+        cdef TreeNode pNode
+        
+        for pNode, pMove in self.parentNodes:
             pNode.edgeVisits[pMove] += 1
             pNode.allVisits += 1
             pNode.edgeTotalValues[pMove] += vs[pNode.state.getPlayerOnTurnIndex()]

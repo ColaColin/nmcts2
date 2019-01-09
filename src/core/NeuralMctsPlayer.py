@@ -507,6 +507,7 @@ class NeuralMctsPlayer():
             bframes.append([])
         
         gamesPlayed = 0
+        draws = 0
         
         while len(frames) < n:
             #print("Begin batch")
@@ -530,6 +531,9 @@ class NeuralMctsPlayer():
                     gamesPlayed += 1
                     termResult = b.getTerminalResult()
                     
+                    if b.state.getWinner() == -1:
+                        draws += 1
+                    
                     if printGame:
                         dStr = "Completed game " + str(gamesPlayed) + ", it went as follows with win target " + str(termResult) + "\n" 
                     
@@ -551,7 +555,7 @@ class NeuralMctsPlayer():
                 else:
                     batch[idx] = b
                 
-        print("Completed %i games" % gamesPlayed)
+        print("Completed %i games with %i draws" % (gamesPlayed, draws))
                 
         torch.cuda.empty_cache()
         return frames
@@ -562,7 +566,7 @@ class NeuralMctsPlayer():
         trees = []
         
         gameNode = TreeNode(self.stateTemplate.getNewGame())
-        
+
         while not gameNode.state.isTerminal():
             self.batchMcts([gameNode])
             trees.append(gameNode.exportTree())
@@ -570,12 +574,13 @@ class NeuralMctsPlayer():
             md = gameNode.getMoveDistribution()
             mv = self._pickMoves(1, md, gameNode.state, gameNode.state.isEarlyGame())[0]
             
-            leftPart = "Improved moves\n" + gameNode.state.moveProbsAndDisplay(md)
+            leftPart = ("Improved moves using max depth %i\n" % gameNode.getTreeDepth()) + gameNode.state.moveProbsAndDisplay(md)
             rightPart = "Network moves, Network values are " + str(gameNode.getNetValueEvaluation()) + "\n" + gameNode.state.moveProbsAndDisplay(gameNode.getEdgePriors())
             
             print(alignStringBlocks(leftPart, rightPart))
             
             gameNode = gameNode.getChildForMove(mv)
+            print(gameNode.getTreeDepth())
         
         return trees
         

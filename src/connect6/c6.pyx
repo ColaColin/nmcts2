@@ -64,6 +64,26 @@ cdef signed char* initField(int m, int n, signed char v):
     
     return result;
 
+cdef int hashC6(Connect6_c* c6):
+    cdef int result = c6.turn
+    
+    cdef int sums = 0
+    
+    for i in range(c6.n * c6.m):
+        sums += (i + 1) * c6.board[i]
+    
+    return result | ((<unsigned int> sums) << 8)
+
+cdef int areFieldsEqual(int m, int n, signed char* fieldA, signed char* fieldB):
+    cdef int eq = 1
+
+    for i in range(n * m):
+        if fieldA[i] != fieldB[i]:
+            eq = 0
+            break
+    
+    return eq
+
 cdef void mirrorField(signed char* f, int m, int n):
     cdef int x, y;
     cdef signed char tmp;
@@ -318,18 +338,24 @@ cdef class Connect6State:
     cdef readonly unsigned long long lastId
     cdef readonly int lastMove
     
+    cdef int hash
+    cdef int hashInvalid
+    
     def __init__(self):
         self.legalMoves = None
-        # the caller of the constructer needs to always construct this directly
+        # the caller of the constructor needs to always construct this directly
         # TODO figure out a less nasty way to handle this
         self.c6 = NULL
         self.initId()
+        self.hash = 0
+        self.hashInvalid = 1
     
     def initId(self):
         self.lastMove = -1
         self.lastId = 0
         self.id = 0
         self.nextId()
+        self.hashInvalid = 1
 
     def nextId(self):
         global seed
@@ -347,6 +373,17 @@ cdef class Connect6State:
         self.legalMoves = None
         self.c6 = pickleUnpackC6(d)
         self.initId()
+    
+    def __hash__(self):
+        if self.hashInvalid:
+            self.hash = hashC6(self.c6)
+            self.hashInvalid = 0
+        return self.hash
+    
+    def __eq__(self, Connect6State other):
+        if other.c6.turn != self.c6.turn or other.c6.m != self.c6.m or other.c6.n != self.c6.n:
+            return False
+        return areFieldsEqual(self.c6.m, self.c6.n, self.c6.board, other.c6.board)
     
     def packageForDebug(self):
         package = {}
@@ -486,7 +523,7 @@ cdef class Connect6State:
         cdef int c
         c = max(self.c6.m, self.c6.n)
         c += c % 2
-        return self.c6.turn < c
+        return self.c6.turn < c * 2
     
     def canTeachSomething(self):
         """
@@ -567,8 +604,10 @@ cdef class Connect6State:
         
         self.lastMove = move
         self.nextId()
+        self.hashInvalid = 1
     
     def updateTensorForLastMove(self, object tensor, int batchIndex):
+        assert False, "this is not used, right?"
         cdef int x, y, b
         cdef Connect6_c* c6 = self.c6
         
@@ -593,13 +632,14 @@ cdef class Connect6State:
         1, 3, 5, 7, 9, ....
         -> uneven turns
         """
-        
+        assert False, "this is not used, right?"
         if self.getTurn() % 2 == 1:
             mask = tensor[batchIndex] == -1
             tensor[batchIndex] += 1
             tensor[batchIndex] %= 2
             tensor[batchIndex].masked_fill_(mask, -1)
     
+    # TODO this is garbage and should not be used _eq_ is implemented now
     def isEqual(self, other):
         """
         returns if this state is equal to the given other state. 
