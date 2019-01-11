@@ -31,7 +31,8 @@ def pickComparativeConfig(config, key):
 if __name__ == '__main__':
     mp.set_start_method("spawn")
     
-    workdir = "/MegaKeks/nmcts2/c6_quick_check2"
+    iteration = None
+    workdir = "/ImbaKeks/nmcts/newDrawOutput"
     playVersion = None #"B"
     firstMove = 0
     
@@ -58,7 +59,7 @@ if __name__ == '__main__':
                                 threads=lconf["threads"],
                                 benchmarkTime=lconf["testInterval"])
     
-    trainer.load(loadFrames = False)
+    trainer.load(loadFrames = False, iteration=iteration)
     package = trainer.learner.recordDemoGame()
     
     writeJson(os.path.join(workdir, "gamerecord.json"), package, pretty=False)

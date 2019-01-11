@@ -92,6 +92,7 @@ cdef class TreeNode():
 
     cdef float[:] noiseCache
 
+    cdef int winningMove
     cdef object terminalResult
 
     cdef float stateValue
@@ -133,6 +134,7 @@ cdef class TreeNode():
             if self.state.isMoveLegal(m):
                 self.edgeLegal[m] = 1
         
+        self.winningMove = -1
         self.terminalResult = None
         
         self.noiseCache = None
@@ -141,9 +143,23 @@ cdef class TreeNode():
         
         self.allVisits = 0
     
+    cdef void backupWinningMove(self, int move):
+        cdef int pMove
+        cdef TreeNode pNode
+    
+        self.winningMove = move
+        for pNode, pMove in self.parentNodes:
+            if pNode.state.getPlayerOnTurnIndex() == self.state.getPlayerOnTurnIndex():
+                pNode.backupWinningMove(pMove)
+            else:
+                break
+    
     cdef TreeNode executeMove(self, int move):
         cdef object newState = self.state.clone()
         newState.simulate(move)
+        
+        if newState.isTerminal() and newState.getWinner() == self.state.getPlayerOnTurnIndex():
+            self.backupWinningMove(move)
         
         cdef TreeNode knownNode
         
@@ -195,6 +211,9 @@ cdef class TreeNode():
         returns a single float that is meant to tell what the best 
         possible expected outcome is by choosing the best possible actions
         """
+        
+        if self.winningMove != -1:
+            return 1
         
         cdef float bestValue = 0
         cdef int i
@@ -277,9 +296,19 @@ cdef class TreeNode():
         return np.copy(np.asarray(self.edgePriors, dtype=np.float32))
     
     def getMoveDistribution(self):
-        return np.asarray(self.edgeVisits, dtype=np.float32) / float(self.allVisits)
+        if self.winningMove != -1:
+            result = np.zeros(self.numMoves, dtype=np.float32)
+            result[self.winningMove] = 1
+            return result
+        
+        else:
+            
+            return np.asarray(self.edgeVisits, dtype=np.float32) / float(self.allVisits)
     
     cdef int pickMove(self, float cpuct):
+        if self.winningMove != -1:
+            return self.winningMove
+    
         cdef int useNoise = len(self.parentNodes) == 0
         
         cdef int i

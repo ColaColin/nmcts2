@@ -423,12 +423,19 @@ cdef class Connect6State:
         if self.lastMove != -1:
             lX, lY = self.getMoveLocation(self.lastMove)
         else:
-            lX = -1
-            lY = -1
+            lX = -50
+            lY = -50
         return toStringC6(self.c6, lX, lY)
     
     def moveProbsAndDisplay(self, mp):
         mm = ['.', '░', '█']
+        
+        if self.lastMove != -1:
+            lastMoveX, lastMoveY = self.getMoveLocation(self.lastMove)
+        else:
+            lastMoveX = -50
+            lastMoveY = -50
+        
         m = self.c6.m
         n = self.c6.n
         c6 = self.c6
@@ -448,7 +455,10 @@ cdef class Connect6State:
                 m = 1
             stone = readField(self.c6.board, self.c6.m, x, y)+1
             if int(m) == 0 or stone > 0:
-                return " " + mm[stone] + "  "
+                if x == lastMoveX and y == lastMoveY:
+                    return "│" + mm[stone] + "│ "
+                else:
+                    return " " + mm[stone] + "  "
             else:
                 m = str(int(m))
                 m = " " + m
@@ -470,8 +480,13 @@ cdef class Connect6State:
         assert n <= len(chars)
         
         for y in range(n):
-            for _ in range(m+1):
-                s += "    ";
+            for x in range(m+1):
+                if x-1 == lastMoveX and y == lastMoveY:
+                    s += "┌─┐ "
+                elif x-1 == lastMoveX and y == lastMoveY+1:
+                    s += "└─┘ "
+                else:
+                    s += "    "
             s += "\n";
             s += " " + chars[y] + "  ";
             for x in range(m):
