@@ -24,6 +24,8 @@ from libc.stdlib cimport rand, RAND_MAX
 # TODO this should be part of the config....
 cdef float DRAW_VALUE = 0.1 # 1 means draws are considered just as good as wins, 0 means draws are considered as bad as losses
 
+cdef float DESPERATION_FACTOR = 0.5
+
 # negative values should be not possible for moves in general?!
 cdef float illegalMoveValue = -1
 
@@ -302,7 +304,7 @@ cdef class TreeNode():
                 if self.edgeVisits[i] == 0:
                     # idea: if the current position is expected to be really good: Follow the network
                     # if the current position is expected to be really bad: explore more, especially if all known options are bad
-                    nodeQ = self.stateValue * self.edgePriors[i] + (1 - self.stateValue) * (1 - bestKnownEdgeMeanValue)
+                    nodeQ = self.stateValue * self.edgePriors[i] + (1 - self.stateValue) * (1 - bestKnownEdgeMeanValue) * DESPERATION_FACTOR
                 else:
                     nodeQ = self.edgeMeanValues[i]
                     

@@ -583,6 +583,31 @@ class NeuralMctsPlayer():
         
         return trees
         
+    def getPlayFunc(self):
+        gameState = self.stateTemplate.getNewGame()
+        
+        def playFunc(movesList):
+            nonlocal gameState
+            
+            for move in movesList:
+                gameState.simulate(move)
+                print(str(gameState))
+                if gameState.isTerminal():
+                    return (gameState.getWinner(), None)
+            myId = gameState.getPlayerOnTurnIndex()
+            myMoves = []
+            while gameState.getPlayerOnTurnIndex() == myId:
+                move = self.findBestMoves([gameState])[0]
+                gameState.simulate(move)
+                print(str(gameState))
+                if gameState.isTerminal():
+                    return (gameState.getWinner(), None)
+                myMoves.append(move)
+            return (None, myMoves)
+        
+        return playFunc
+        
+        
     def playAgainst(self, n, batchSize, others, collectFrames=False):
         """
         play against other neural mcts players, in batches.
