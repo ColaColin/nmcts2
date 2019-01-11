@@ -186,8 +186,8 @@ cdef struct Connect6_c:
     int winningPlayer
     signed char* board
 
-cdef object toStringC6(Connect6_c* c6):
-        mm = ['.', '█', '░']
+cdef object toStringC6(Connect6_c* c6, int lastMoveX, int lastMoveY):
+        mm = ['.', '░', '█']
         s = "Connect6(%i,%i), " %  (c6.m, c6.n)
         if hasEndedC6(c6) == 0:
             s += "Turn %i: %s\n" % (c6.turn, mm[getPlayerIndexOnTurnC6(c6)+1])
@@ -210,13 +210,24 @@ cdef object toStringC6(Connect6_c* c6):
         assert c6.n <= len(chars)
         
         for y in range(c6.n):
-            for _ in range(c6.m+1):
-                s += "    ";
+            for x in range(c6.m+1):
+                if x-1 == lastMoveX and y == lastMoveY:
+                    s += "┌─┐ "
+                elif x-1 == lastMoveX and y == lastMoveY+1:
+                    s += "└─┘ "
+                else:
+                    s += "    "
+                
             s += "\n";
             s += " " + chars[y] + "  ";
             for x in range(c6.m):
-                s += " " + mm[readField(c6.board, c6.m, x, y)+1] + "  ";
+                if x == lastMoveX and y == lastMoveY:
+                    s += "│" + mm[readField(c6.board, c6.m, x, y)+1] + "│ ";
+                else:
+                    s += " " + mm[readField(c6.board, c6.m, x, y)+1] + "  ";
+                
             s += "\n";
+            
         for _ in range(c6.m+1):
             s += "    ";
         s += "\n";
@@ -409,10 +420,15 @@ cdef class Connect6State:
         return str(x+1) + "-" + chars[y] 
     
     def __str__(self):
-        return toStringC6(self.c6)
+        if self.lastMove != -1:
+            lX, lY = self.getMoveLocation(self.lastMove)
+        else:
+            lX = -1
+            lY = -1
+        return toStringC6(self.c6, lX, lY)
     
     def moveProbsAndDisplay(self, mp):
-        mm = ['.', '█', '░']
+        mm = ['.', '░', '█']
         m = self.c6.m
         n = self.c6.n
         c6 = self.c6

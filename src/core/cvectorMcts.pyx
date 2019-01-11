@@ -24,7 +24,7 @@ from libc.stdlib cimport rand, RAND_MAX
 # TODO this should be part of the config....
 cdef float DRAW_VALUE = 0.1 # 1 means draws are considered just as good as wins, 0 means draws are considered as bad as losses
 
-cdef float DESPERATION_FACTOR = 0.5
+cdef float DESPERATION_FACTOR = 0.1
 
 # negative values should be not possible for moves in general?!
 cdef float illegalMoveValue = -1
@@ -88,9 +88,7 @@ cdef class TreeNode():
     cdef float [:] edgePriors
     cdef float [:] edgeVisits
     cdef float [:] edgeTotalValues
-    cdef float [:] edgeMeanValues
     cdef signed char [:] edgeLegal
-    cdef float [:] valueTmp
 
     cdef float[:] noiseCache
 
@@ -128,8 +126,6 @@ cdef class TreeNode():
         self.edgePriors = np.zeros(mc, dtype=np.float32)
         self.edgeVisits = np.zeros(mc, dtype=np.float32)
         self.edgeTotalValues = np.zeros(mc, dtype=np.float32)
-        self.edgeMeanValues = np.zeros(mc, dtype=np.float32)
-        self.valueTmp = np.zeros(mc, dtype=np.float32)
         
         self.edgeLegal = np.zeros(mc, dtype=np.int8)
         cdef int m
@@ -186,7 +182,7 @@ cdef class TreeNode():
             e["tree"] = child.exportTree()
             e["visits"] = self.edgeVisits[move]
             e["totalValue"] = self.edgeTotalValues[move]
-            e["meanValue"] = self.edgeMeanValues[move]
+            e["meanValue"] = self.edgeTotalValues[move] / self.edgeVisits[move]
             
             edges[move] = e
 
@@ -199,7 +195,15 @@ cdef class TreeNode():
         returns a single float that is meant to tell what the best 
         possible expected outcome is by choosing the best possible actions
         """
-        return np.max(self.edgeMeanValues)
+        
+        cdef float bestValue = 0
+        cdef int i
+        
+        for i in range(self.numMoves):
+            if self.edgeVisits[i] > 0 and (self.edgeTotalValues[i] / self.edgeVisits[i]) > bestValue:
+                bestValue = (self.edgeTotalValues[i] / self.edgeVisits[i])
+        
+        return bestValue
     
     def cutTree(self):
         """
@@ -222,8 +226,7 @@ cdef class TreeNode():
             self.edgePriors[i] = 0
             self.edgeVisits[i] = 0
             self.edgeTotalValues[i] = 0
-            self.edgeMeanValues[i] = 0
-       
+      
         self.stateValue = 0.5
         self.allVisits = 0
        
@@ -288,14 +291,14 @@ cdef class TreeNode():
         
         cdef float vFactor = self.getVisitsFactor() 
 
-        cdef float bestKnownEdgeMeanValue = np.max(self.edgeMeanValues)
+        cdef float [:] valueTmp = np.zeros(self.numMoves, dtype=np.float32)
 
         for i in range(self.numMoves):
             if self.edgeLegal[i] == 1:
                 if useNoise:
-                    self.valueTmp[i] = (1 - self.noiseMix) * self.edgePriors[i] + self.noiseMix * self.noiseCache[i]
+                    valueTmp[i] = (1 - self.noiseMix) * self.edgePriors[i] + self.noiseMix * self.noiseCache[i]
                 else:
-                    self.valueTmp[i] = self.edgePriors[i]
+                    valueTmp[i] = self.edgePriors[i]
                 
                 # not using an initialization of zero is a pretty good idea.
                 # not only for search quality (to be proven) but also for search speed by like 50%
@@ -303,18 +306,17 @@ cdef class TreeNode():
                 # situations the tree search will start to extensively explore bad plays to the point of diminishing the winning play probability quite considerably.
                 if self.edgeVisits[i] == 0:
                     # idea: if the current position is expected to be really good: Follow the network
-                    # if the current position is expected to be really bad: explore more, especially if all known options are bad
-                    nodeQ = self.stateValue * self.edgePriors[i] + (1 - self.stateValue) * (1 - bestKnownEdgeMeanValue) * DESPERATION_FACTOR
+                    nodeQ = self.stateValue * self.edgePriors[i] + (1 - self.stateValue) * DESPERATION_FACTOR
                 else:
-                    nodeQ = self.edgeMeanValues[i]
+                    nodeQ = self.edgeTotalValues[i] / self.edgeVisits[i]
                     
-                nodeU = self.valueTmp[i] * (vFactor / (1.0 + self.edgeVisits[i]))
+                nodeU = valueTmp[i] * (vFactor / (1.0 + self.edgeVisits[i]))
                 
-                self.valueTmp[i] = nodeQ + cpuct * nodeU
+                valueTmp[i] = nodeQ + cpuct * nodeU
             else:
-                self.valueTmp[i] = illegalMoveValue
+                valueTmp[i] = illegalMoveValue
        
-        cdef int result = bestLegalValue(self.valueTmp)
+        cdef int result = bestLegalValue(valueTmp)
         
         return result
         
@@ -337,7 +339,6 @@ cdef class TreeNode():
             pNode.edgeTotalValues[pMove] += vs[pNode.state.getPlayerOnTurnIndex()]
             if pNode.state.hasDraws():
                 pNode.edgeTotalValues[pMove] += vs[self.state.getPlayerCount()] * DRAW_VALUE
-            pNode.edgeMeanValues[pMove] = float(pNode.edgeTotalValues[pMove]) / pNode.edgeVisits[pMove]
             pNode.backup(vs)
     
     def getTerminalResult(self):

@@ -140,10 +140,10 @@ if __name__ == '__main__':
                                 threads=lconf["threads"],
                                 benchmarkTime=lconf["testInterval"])
     
-    trainer.load(loadFrames = False)
+    trainer.load(loadFrames = False, iteration=42)
     
     playFunc = trainer.learner.getPlayFunc()
     
-    playVsCloudict("/ImbaKeks/cloudict/gameEngine", 7, True, playFunc)
+    playVsCloudict("/ImbaKeks/cloudict/gameEngine", 5, True, playFunc)
     
     

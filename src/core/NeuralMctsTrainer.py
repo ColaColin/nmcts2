@@ -259,11 +259,15 @@ class NeuralMctsTrainer():
         
         print("Done learning in %f" % (time.time() - t))
 
-    def load(self, loadFrames = True):
+    def load(self, loadFrames = True, iteration = None):
         spath = os.path.join(self.workingdir, "status.json")
         if (os.path.exists(spath)):
             status = openJson(spath)
-            print("Continue training of a player at iteration " + str(status["iteration"]))
+            
+            if iteration is None:
+                iteration = status["iteration"]
+            
+            print("Continue training of a player at iteration " + str(iteration))
         else:
             print("Beginning training of a new player")
             status = {}
@@ -274,17 +278,17 @@ class NeuralMctsTrainer():
         self.bestIteration = status["bestIteration"]
         self.lastBenchmarkTime = time.time() - status["lastBenchmark"]
         
-        lPath = os.path.join(self.workingdir, "learner.iter" + str(status["iteration"]))
+        lPath = os.path.join(self.workingdir, "learner.iter" + str(iteration))
         if os.path.exists(lPath):
             self.learner.learner.initState(lPath)
         
-        fPath = os.path.join(self.workingdir, "frameHistory"+ str(status["iteration"]) +".pickle")
+        fPath = os.path.join(self.workingdir, "frameHistory"+ str(iteration) +".pickle")
         if os.path.exists(fPath) and loadFrames:
             with open(fPath, "rb") as f:
                 self.frameHistory = pickle.load(f)
                 print("Loaded %i frames " % len(self.frameHistory))
             
-        return status["iteration"] + 1
+        return iteration + 1
     
     def saveFrames(self, iteration):
         fPath = os.path.join(self.workingdir, "frameHistory"+ str(iteration) +".pickle")
