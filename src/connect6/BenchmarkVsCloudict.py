@@ -145,6 +145,6 @@ if __name__ == '__main__':
     
     playFunc = trainer.learner.getPlayFunc()
     
-    playVsCloudict("/ImbaKeks/cloudict/gameEngine", 5, True, playFunc)
+    playVsCloudict("/ImbaKeks/cloudict/gameEngine", 5, False, playFunc)
     
     

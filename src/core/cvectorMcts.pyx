@@ -65,7 +65,7 @@ cdef object dconsts = {}
 cdef object getDconst(int n):
     global dconsts
     if not n in dconsts:
-        dconsts[n] = np.asarray([0.03] * n, dtype=np.float32)
+        dconsts[n] = np.asarray([10.0 / n] * n, dtype=np.float32)
     return dconsts[n]
 
 cdef class TreeNode():
@@ -75,20 +75,19 @@ cdef class TreeNode():
     cdef float noiseMix
     cdef int isExpanded
     
-    cdef object dconst
-    
     cdef object parentNodes
 
     cdef object children
     
     cdef int useNodeRepository
     cdef object nodeRepository
+
+    cdef unsigned short [:] compressedMoveToMove
     
     cdef int numMoves
     cdef float [:] edgePriors
     cdef float [:] edgeVisits
     cdef float [:] edgeTotalValues
-    cdef signed char [:] edgeLegal
 
     cdef float[:] noiseCache
 
@@ -100,10 +99,9 @@ cdef class TreeNode():
     
     cdef object netValueEvaluation
 
-    def __init__(self, state, parentNodes = [], noiseMix = 0.1, nodeRepository = None, useNodeRepository = True):
+    def __init__(self, state, parentNodes = [], noiseMix = 0.25, nodeRepository = None, useNodeRepository = True):
         self.state = state
-        cdef int mc = self.state.getMoveCount()
-    
+        
         self.useNodeRepository = useNodeRepository
     
         if self.useNodeRepository:
@@ -120,37 +118,42 @@ cdef class TreeNode():
         
         self.children = {}
         
-        self.dconst = getDconst(mc)
-
-        self.numMoves = mc
-
-        self.edgePriors = np.zeros(mc, dtype=np.float32)
-        self.edgeVisits = np.zeros(mc, dtype=np.float32)
-        self.edgeTotalValues = np.zeros(mc, dtype=np.float32)
-        
-        self.edgeLegal = np.zeros(mc, dtype=np.int8)
-        cdef int m
-        for m in range(self.numMoves):
-            if self.state.isMoveLegal(m):
-                self.edgeLegal[m] = 1
-        
         self.winningMove = -1
         self.terminalResult = None
         
         self.noiseCache = None
         
-        self.stateValue = 0.5
+        self.stateValue = 0.5 #overwritten before first use
         
         self.allVisits = 0
+        
+        self.numMoves = -1
+        self.compressedMoveToMove = None
+        self.edgeVisits = None
+        self.edgeTotalValues = None
+        
+        self.edgePriors = None
+
+    cdef void lazyInitEdgeData(self):
+        if self.numMoves == -1:
+            legalMoves = self.state.getLegalMoves()
+            self.numMoves = len(legalMoves)
+            self.compressedMoveToMove = np.array(legalMoves, dtype=np.uint16)
+            self.edgeVisits = np.zeros(self.numMoves, dtype=np.float32)
+            self.edgeTotalValues = np.zeros(self.numMoves, dtype=np.float32)
     
     cdef void backupWinningMove(self, int move):
+        if self.winningMove != -1:
+            return
+    
+        self.winningMove = move
+        
         cdef int pMove
         cdef TreeNode pNode
     
-        self.winningMove = move
         for pNode, pMove in self.parentNodes:
             if pNode.state.getPlayerOnTurnIndex() == self.state.getPlayerOnTurnIndex():
-                pNode.backupWinningMove(pMove)
+                pNode.backupWinningMove(pNode.compressedMoveToMove[pMove])
             else:
                 break
     
@@ -163,12 +166,20 @@ cdef class TreeNode():
         
         cdef TreeNode knownNode
         
+        cdef int ix
+        cdef int compressedNodeIdx = -1
+        
+        for ix in range(self.numMoves):
+            if self.compressedMoveToMove[ix] == move:
+                compressedNodeIdx = ix
+                break
+            
         if self.useNodeRepository and newState in self.nodeRepository:
             knownNode = self.nodeRepository[newState]
-            knownNode.parentNodes.append((self, move))
+            knownNode.parentNodes.append((self, compressedNodeIdx))
             return knownNode
         
-        cdef TreeNode newNode = TreeNode(newState, [(self, move)], noiseMix = self.noiseMix, nodeRepository = self.nodeRepository, useNodeRepository = self.useNodeRepository) 
+        cdef TreeNode newNode = TreeNode(newState, [(self, compressedNodeIdx)], noiseMix = self.noiseMix, nodeRepository = self.nodeRepository, useNodeRepository = self.useNodeRepository) 
         
         if self.useNodeRepository:
             self.nodeRepository[newState] = newNode
@@ -184,8 +195,9 @@ cdef class TreeNode():
         me["state"] = self.state.packageForDebug()
         me["expanded"] = self.isExpanded
         me["winner"] = self.state.getWinner()
-        me["priors"] = np.asarray(self.edgePriors).tolist()
-        me["netValue"] = np.asarray(self.netValueEvaluation).tolist()
+        if self.isExpanded:
+            me["priors"] = np.asarray(self.edgePriors).tolist()
+            me["netValue"] = np.asarray(self.netValueEvaluation).tolist()
 
         edges = {}
         
@@ -215,6 +227,9 @@ cdef class TreeNode():
         if self.winningMove != -1:
             return 1
         
+        if self.numMoves == -1:
+            return 0
+        
         cdef float bestValue = 0
         cdef int i
         
@@ -240,11 +255,17 @@ cdef class TreeNode():
         self.parentNodes = []
         self.terminalResult = None
         self.nodeRepository = {}
+
+        cdef int i
+
+        if self.edgePriors is not None:
+            for i in range(self.state.getMoveCount()):
+                self.edgePriors[i] = 0 
         
-        for i in range(self.numMoves):
-            self.edgePriors[i] = 0
-            self.edgeVisits[i] = 0
-            self.edgeTotalValues[i] = 0
+        if self.numMoves != -1:
+            for i in range(self.numMoves):
+                self.edgeVisits[i] = 0
+                self.edgeTotalValues[i] = 0
       
         self.stateValue = 0.5
         self.allVisits = 0
@@ -267,7 +288,7 @@ cdef class TreeNode():
         return max([self.children[ckey].getTreeDepth() for ckey in self.children]) + 1 
     
     def getChildForMove(self, int move):
-        assert self.isExpanded
+        self.lazyInitEdgeData()
         
         cdef TreeNode child = None
         
@@ -293,17 +314,21 @@ cdef class TreeNode():
         return child
     
     def getEdgePriors(self):
-        return np.copy(np.asarray(self.edgePriors, dtype=np.float32))
+        if self.edgePriors is None:
+            return np.zeros(self.state.getMoveCount(), dtype=np.float32)
+        else:
+            return np.copy(np.asarray(self.edgePriors, dtype=np.float32))
     
     def getMoveDistribution(self):
-        if self.winningMove != -1:
-            result = np.zeros(self.numMoves, dtype=np.float32)
-            result[self.winningMove] = 1
-            return result
+        result = np.zeros(self.state.getMoveCount(), dtype=np.float32)
         
+        if self.winningMove != -1:
+            result[self.winningMove] = 1
         else:
+            result[self.compressedMoveToMove] = self.edgeVisits
+            result /= float(self.allVisits)
             
-            return np.asarray(self.edgeVisits, dtype=np.float32) / float(self.allVisits)
+        return result
     
     cdef int pickMove(self, float cpuct):
         if self.winningMove != -1:
@@ -316,41 +341,42 @@ cdef class TreeNode():
         cdef float nodeQ, nodeU
 
         if useNoise and self.noiseCache is None:
-            self.noiseCache = np.random.dirichlet(self.dconst).astype(np.float32)
+            self.noiseCache = np.random.dirichlet(getDconst(self.numMoves)).astype(np.float32)
         
         cdef float vFactor = self.getVisitsFactor() 
 
         cdef float [:] valueTmp = np.zeros(self.numMoves, dtype=np.float32)
 
+        cdef int decompressedMove
+
         for i in range(self.numMoves):
-            if self.edgeLegal[i] == 1:
-                if useNoise:
-                    valueTmp[i] = (1 - self.noiseMix) * self.edgePriors[i] + self.noiseMix * self.noiseCache[i]
-                else:
-                    valueTmp[i] = self.edgePriors[i]
-                
-                # not using an initialization of zero is a pretty good idea.
-                # not only for search quality (to be proven) but also for search speed by like 50%
-                # zero may be bad, stateValue is far worse! That means that especially for very clear cut
-                # situations the tree search will start to extensively explore bad plays to the point of diminishing the winning play probability quite considerably.
-                if self.edgeVisits[i] == 0:
-                    # idea: if the current position is expected to be really good: Follow the network
-                    nodeQ = self.stateValue * self.edgePriors[i] + (1 - self.stateValue) * DESPERATION_FACTOR
-                else:
-                    nodeQ = self.edgeTotalValues[i] / self.edgeVisits[i]
-                    
-                nodeU = valueTmp[i] * (vFactor / (1.0 + self.edgeVisits[i]))
-                
-                valueTmp[i] = nodeQ + cpuct * nodeU
+            decompressedMove = self.compressedMoveToMove[i]
+            if useNoise:
+                valueTmp[i] = (1 - self.noiseMix) * self.edgePriors[decompressedMove] + self.noiseMix * self.noiseCache[i]
             else:
-                valueTmp[i] = illegalMoveValue
+                valueTmp[i] = self.edgePriors[decompressedMove]
+            
+            # not using an initialization of zero is a pretty good idea.
+            # not only for search quality (to be proven) but also for search speed by like 50%
+            # zero may be bad, stateValue is far worse! That means that especially for very clear cut
+            # situations the tree search will start to extensively explore bad plays to the point of diminishing the winning play probability quite considerably.
+            if self.edgeVisits[i] == 0:
+                # idea: if the current position is expected to be really good: Follow the network
+                nodeQ = self.stateValue * self.edgePriors[decompressedMove] + (1 - self.stateValue) * DESPERATION_FACTOR
+            else:
+                nodeQ = self.edgeTotalValues[i] / self.edgeVisits[i]
+                
+            nodeU = valueTmp[i] * (vFactor / (1.0 + self.edgeVisits[i]))
+            
+            valueTmp[i] = nodeQ + cpuct * nodeU
        
         cdef int result = bestLegalValue(valueTmp)
         
-        return result
-        
+        return self.compressedMoveToMove[result]
     
     cdef TreeNode selectMove(self, float cpuct):
+        self.lazyInitEdgeData()
+    
         move = self.pickMove(cpuct)
         
         if not move in self.children:
@@ -385,11 +411,12 @@ cdef class TreeNode():
                     r[numOutputs-1] = 1
                 else:
                     r = [1.0 / self.state.getPlayerCount()] * self.state.getPlayerCount()
-            self.terminalResult = r
+            self.terminalResult = np.array(r, dtype=np.float32)
 
         return self.terminalResult
     
     cdef void expand(self, object movePMap, object vs):
+        self.edgePriors = np.zeros(self.state.getMoveCount(), dtype=np.float32)
         np.copyto(np.asarray(self.edgePriors), movePMap, casting="no")
         self.isExpanded = 1
         self.netValueEvaluation = np.array(vs)

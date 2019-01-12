@@ -200,7 +200,10 @@ if __name__ == '__main__':
     #workdir = "/MegaKeks/nmcts2/c6_13_compare_8"
     #runComparativeTraining(workdir)
 
-    workdir = "/ImbaKeks/nmcts/newDrawOutput"
+    workdir = "/MegaKeks/nmcts2/c6_quick_check2"
+    
+    #workdir = "/ImbaKeks/nmcts/newDrawOutput"
+    
     runSingleTraining(workdir)
     
     

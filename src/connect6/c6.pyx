@@ -343,7 +343,6 @@ cdef unsigned long long seed = 1
 
 cdef class Connect6State:
     cdef Connect6_c* c6
-    cdef object legalMoves
     
     cdef readonly unsigned long long id
     cdef readonly unsigned long long lastId
@@ -353,7 +352,6 @@ cdef class Connect6State:
     cdef int hashInvalid
     
     def __init__(self):
-        self.legalMoves = None
         # the caller of the constructor needs to always construct this directly
         # TODO figure out a less nasty way to handle this
         self.c6 = NULL
@@ -381,7 +379,6 @@ cdef class Connect6State:
         return (Connect6State, (), picklePackC6(self.c6))
     
     def __setstate__(self, d):
-        self.legalMoves = None
         self.c6 = pickleUnpackC6(d)
         self.initId()
     
@@ -525,15 +522,13 @@ cdef class Connect6State:
     def getLegalMoves(self):
         """
         return a list of all indices of legal moves
-        performance relevant. cache it hard
         """
         cdef int moveIdx
-        if self.legalMoves is None:
-            self.legalMoves = []
-            for moveIdx in range(self.getMoveCount()):
-                if self.isMoveLegal(moveIdx):
-                    self.legalMoves.append(moveIdx)
-        return self.legalMoves
+        legalMoves = []
+        for moveIdx in range(self.getMoveCount()):
+            if self.isMoveLegal(moveIdx):
+                legalMoves.append(moveIdx)
+        return legalMoves
         
     def getPlayerOnTurnIndex(self):
         """
@@ -630,7 +625,6 @@ cdef class Connect6State:
         Mutate this object.
         """
         cdef int x, y, key
-        self.legalMoves = None
         key = move
         x = key % self.c6.m
         y = key / self.c6.m

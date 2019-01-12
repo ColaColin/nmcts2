@@ -436,7 +436,7 @@ class NeuralMctsPlayer():
             sys.stdout.flush()
     
     # todo if one could get the caller to deal with the treenode data it might be possible to not throw away the whole tree that was build, increasing play strength
-    def findBestMoves(self, states, noiseMix=0.2):
+    def findBestMoves(self, states, noiseMix=0.25):
         """
         searches for the best moves to play in the given states
         this means the move with the most visits in the mcts result greedily is selected

@@ -19,6 +19,8 @@ import sys
 
 from core.misc import openJson, writeJson
 
+import numpy as np
+
 # given an N player game:
 # assert N % 2 == 0 #because I don't want to think about the more general case...
 # setup N/2 players playing as the learner, N/2 as bestPlayer
@@ -159,6 +161,88 @@ class NeuralMctsTrainer():
             
         return improved
     
+    def averageFrames(self, frameList):
+        result = frameList[0]
+        
+        for i in range(1, len(frameList)):
+            result[1] += frameList[i][1]
+            result[2] += frameList[i][2]
+            result[3] += frameList[i][3]
+        
+        result[1] /= len(frameList)
+        result[2] /= len(frameList)
+        result[3] /= len(frameList)
+
+        return result
+    
+    def updateFrame(self, targetFrame, newFrame):
+        # move probabilities, mostly use the new ones
+        targetFrame[1] = 0.9 * newFrame[1] + 0.1 * targetFrame[1]
+        
+        # no idea what best value is even for...
+        targetFrame[2] = 0.5 * newFrame[2] + 0.5 * newFrame[2]
+        
+        # winning probabilities, be less sure about changes
+        targetFrame[3] = 0.5 * newFrame[3] + 0.5 * newFrame[3]
+    
+    def addNewFramesToHistory(self, newFrames, iteration):
+        uniqueFrames = {}
+        
+        for newFrame in newFrames:
+            if not newFrame[0] in uniqueFrames:
+                uniqueFrames[newFrame[0]] = []
+            uniqueFrames[newFrame[0]].append(newFrame)
+        
+        uniqList = []
+        
+        for key in uniqueFrames:
+            uniqList.append(self.averageFrames(uniqueFrames[key]))
+        
+        print("Got %i unique frames!" % len(uniqList))
+        
+        knownFramesDict = {}
+        for hidx, hframe in enumerate(self.frameHistory):
+            knownFramesDict[hframe[0][0]] = hidx
+        
+        newFrames = 0
+        
+        for newFrame in uniqList:
+            if newFrame[0] in knownFramesDict:
+                frameIdx = knownFramesDict[newFrame[0]]
+                self.updateFrame(self.frameHistory[frameIdx][0], newFrame)
+                self.frameHistory[frameIdx][1] = time.time()
+            else:
+                newFrames += 1
+                self.frameHistory.append([newFrame, time.time()])
+        
+        print("That makes %i new frames!" % newFrames)
+
+        self.frameHistory.sort(key=lambda x: x[1])
+
+        maxFrameBufferSize = 0
+
+        if iteration < 5:
+            maxFrameBufferSize = self.framesPerIteration * 5
+        else:
+            maxFrameBufferSize = self.framesPerIteration * 5 + (iteration - 5) * self.framesPerIteration // 2
+            
+        if maxFrameBufferSize > self.learner.learner.getFramesBufferSize():
+            maxFrameBufferSize = self.learner.learner.getFramesBufferSize()
+
+        print("Max frame buffer size for iteration %i is %i, currently used: %i" % (iteration, maxFrameBufferSize, len(self.frameHistory)))
+
+        rmFrames = 0
+
+        while len(self.frameHistory) > maxFrameBufferSize:
+            rmFrames += 1
+            del self.frameHistory[0]
+
+        if rmFrames > 0:
+            print("Removed %i old frames" % rmFrames)
+
+        random.shuffle(self.frameHistory)
+        
+    
     def doLearningIteration(self, iteration, keepFramesPerc=1.0):
         t = time.time()
         t0 = t
@@ -191,7 +275,6 @@ class NeuralMctsTrainer():
 #         
         cframes = 0
         ignoreFrames = 0
-        learnFrames = []
         newFrames = []
          
         for asy in asyncs:
@@ -206,8 +289,6 @@ class NeuralMctsTrainer():
                 asyResult = asy
             for f in asyResult:
                 cframes += 1
-                if cframes < maxFrames:
-                    learnFrames.append(f)
                 newFrames.append(f)
         
         print("Collected %i frames in %f" % (cframes, (time.time() - t)))
@@ -218,21 +299,9 @@ class NeuralMctsTrainer():
         
         sys.stdout.flush()
         
-        random.shuffle(self.frameHistory)
+        self.addNewFramesToHistory(newFrames, iteration)
         
-        for historicFrame in self.frameHistory:
-            if len(learnFrames) < self.learner.learner.getFramesBufferSize():
-                learnFrames.append(historicFrame)
-            else:
-                break
-            
-        for f in newFrames:
-            self.frameHistory.append(f)
-        
-        while len(self.frameHistory) > self.learner.learner.getFramesBufferSize():
-            del self.frameHistory[0]
-        
-        self.learnFrames(learnFrames, iteration)
+        self.learnFrames([x[0] for x in self.frameHistory], iteration)
 
         didBenchmark = False
 
@@ -274,6 +343,7 @@ class NeuralMctsTrainer():
             status["lastBenchmark"] = 0
             status["iteration"] = 0
             status["bestIteration"] = 0
+            iteration = 0
         
         self.bestIteration = status["bestIteration"]
         self.lastBenchmarkTime = time.time() - status["lastBenchmark"]
