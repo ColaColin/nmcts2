@@ -20,6 +20,7 @@ ctypedef np.float32_t DTYPE_t
 
 from libc.stdlib cimport rand, RAND_MAX
 
+import time
 
 # TODO this should be part of the config....
 cdef float DRAW_VALUE = 0.1 # 1 means draws are considered just as good as wins, 0 means draws are considered as bad as losses
@@ -419,34 +420,115 @@ cdef class TreeNode():
         self.edgePriors = np.zeros(self.state.getMoveCount(), dtype=np.float32)
         np.copyto(np.asarray(self.edgePriors), movePMap, casting="no")
         self.isExpanded = 1
-        self.netValueEvaluation = np.array(vs)
+        self.netValueEvaluation = vs
         self.stateValue = vs[self.state.getPlayerOnTurnIndex()]
         if (self.state.hasDraws()):
             self.stateValue += vs[self.state.getPlayerCount()] * DRAW_VALUE
     
     def getNetValueEvaluation(self):
         return self.netValueEvaluation
+
+
+
+    # init
+    # prepareA
+    # evaluate A
+    # prepare B
     
+    # GPU        - CPU
+    # do:
+    # evaluate B - backup A, prepare A 
+    # evaluate A - backup B, prepare B
+    # repeat
+    
+    # complete
+    # backupA
+    
+def backupWork(backupSet, evalout):
+    cdef TreeNode node
+
+    for idx, ev in enumerate(evalout):
+        node = backupSet[idx]
+        w = ev[1]
+        if node.state.isTerminal():
+            w = node.getTerminalResult()
+        else:
+            node.expand(ev[0], ev[1])
+        node.backup(w)
+
+def cpuWork(prepareSet, backupSet, evalout, cpuct):
+    prepareResult = []
+    
+    cdef TreeNode tnode
+    
+    if backupSet is not None:
+        backupWork(backupSet, evalout)
+    
+    for i in range(len(prepareSet)):
+        tnode = prepareSet[i]
+        prepareResult.append(tnode.selectDown(cpuct))
+
+    return prepareResult
+
 def batchedMcts(object states, int expansions, evaluator, float cpuct):
     workspace = states
     
-    cdef TreeNode tmp, node
+    halfw = len(workspace) // 2
     
-    for _ in range(expansions):
-        tlst = workspace
-        workspace = [] 
-        for i in range(len(tlst)):
-            tmp = tlst[i]
-            workspace.append(tmp.selectDown(cpuct))
+    workspaceA = workspace[:halfw]
+    workspaceB = workspace[halfw:]
+
+    asyncA = True
+
+    preparedDataA = cpuWork(workspaceA, None, None, cpuct)
+    evaloutA = evaluator(preparedDataA)
+    
+    preparedDataB = cpuWork(workspaceB, None, None, cpuct)
+    evaloutB = None
+    
+    def asyncWork():
+        nonlocal preparedDataA
+        nonlocal preparedDataB
+        nonlocal asyncA
+        nonlocal cpuct
+        nonlocal evaloutA
+        nonlocal evaloutB
+        nonlocal workspaceA
+        nonlocal workspaceB
         
-        evalout = evaluator(workspace)
-        for idx, ev in enumerate(evalout):
-            node = workspace[idx]
-            
-            w = ev[1]
-            if node.state.isTerminal():
-                w = node.getTerminalResult()
+        if asyncA:
+            preparedDataA = cpuWork(workspaceA, preparedDataA, evaloutA, cpuct)
+        else:
+            preparedDataB = cpuWork(workspaceB, preparedDataB, evaloutB, cpuct)
+
+    for _ in range(expansions):
+        for _ in range(2):
+            if asyncA:
+                evaloutB = evaluator(preparedDataB, asyncWork)
             else:
-                node.expand(ev[0], ev[1])
-            node.backup(w)
-            workspace[idx] = states[idx]
+                evaloutA = evaluator(preparedDataA, asyncWork)
+            asyncA = not asyncA
+
+    backupWork(preparedDataA, evaloutA)
+
+#     cdef TreeNode tmp, node
+#     
+#     for _ in range(expansions):
+#         tlst = workspace
+#         workspace = [] 
+#         for i in range(len(tlst)):
+#             tmp = tlst[i]
+#             workspace.append(tmp.selectDown(cpuct))
+# 
+#         evalout = evaluator(workspace)
+#         
+#         for idx, ev in enumerate(evalout):
+#             node = workspace[idx]
+#             
+#             w = ev[1]
+#             if node.state.isTerminal():
+#                 w = node.getTerminalResult()
+#             else:
+#                 node.expand(ev[0], ev[1])
+#             node.backup(w)
+#             workspace[idx] = states[idx]

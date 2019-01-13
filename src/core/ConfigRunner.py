@@ -194,15 +194,21 @@ def runComparativeTraining(workdir):
         print("A took %i, B took %i" % (aTime, bTime))
         print("A:B:Draws is %i : %i : %i" % (aWins, bWins, draws))
 
+import torch
+
 if __name__ == '__main__':
     mp.set_start_method("spawn")
+    
+    print("Running pytorch version", torch.__version__)
     
     #workdir = "/MegaKeks/nmcts2/c6_13_compare_8"
     #runComparativeTraining(workdir)
 
-    workdir = "/MegaKeks/nmcts2/c6_quick_check2"
+    #workdir = "/MegaKeks/nmcts2/c6_quick_check2"
     
-    #workdir = "/ImbaKeks/nmcts/newDrawOutput"
+    #workdir = "/MegaKeks/nmcts2/bignetwork_test"
+    
+    workdir = "/ImbaKeks/nmcts/frameBufferChanges"
     
     runSingleTraining(workdir)
     

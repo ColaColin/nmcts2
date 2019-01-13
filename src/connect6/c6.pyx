@@ -579,6 +579,7 @@ cdef class Connect6State:
         c = Connect6State()
         c.c6 = cloneC6(self.c6)
         c.id = self.id
+        c.lastMove = c.lastMove
         return c
     
     def getFrameClone(self):
@@ -591,6 +592,7 @@ cdef class Connect6State:
         c = Connect6State()
         c.c6 = cloneC6(self.c6)
         c.id = self.id
+        c.lastMove = c.lastMove
         return c
     
     def getNewGame(self):

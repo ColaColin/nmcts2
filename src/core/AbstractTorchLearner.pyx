@@ -182,10 +182,10 @@ class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
     this has to be able to deal with None values in the batch!
     also if len(batch) > batchSize this will explode
     """
-    def evaluate(self, batch):
+    def evaluate(self, batch, asyncCall = None):
         if not self.netInIsCached:#
             self.netInCacheCpu = torch.zeros((self.batchSize, ) + self.getNetInputShape()).pin_memory()
-            self.netInCache = Variable(torch.zeros((self.batchSize, ) + self.getNetInputShape())).cuda()
+            self.netInCache = Variable(torch.zeros((self.batchSize, ) + self.getNetInputShape()), requires_grad=False).cuda()
             self.netInIsCached = True
 #             self.initGpuStateCache()
 
@@ -193,6 +193,11 @@ class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
 
         cdef int batchSize = len(batch)
         cdef int idx, bidx
+        
+        if batchSize == 0:
+            if asyncCall is not None:
+                asyncCall()
+            return []
         
         for idx in range(batchSize):
             b = batch[idx]
@@ -207,29 +212,38 @@ class AbstractTorchLearner(AbstractLearner, metaclass=abc.ABCMeta):
 #         assert np.all(self.netInCache[:len(batch)].cpu().numpy() == self.netInCacheCpu[:len(batch)])
 #         print("OK", batchSize)
         
-        moveP, winP = self.net(self.netInCache[:len(batch)])
+        with torch.no_grad():
+            moveP, winP = self.net(self.netInCache[:len(batch)])
+
+        # this is the place to do work in parallel with the gpu!
+        if asyncCall is not None:
+            asyncCall()
 
         winP = torch.exp(winP)
         moveP = torch.exp(moveP)
-        
+
         cdef int pcount = state.getPlayerCount()
         if state.hasDraws():
             pcount += 1
         cdef int pid
         
+        cdef int mappedIndex
+        
+        cdef float [:,:] moveTensor = moveP.cpu().numpy()
+        cdef float [:,:] winTensor = winP.cpu().numpy()
+
         results = []
         for bidx in range(batchSize):
             b = batch[bidx]
             if b is not None:
                 state = b
+
+                r = np.asarray(moveTensor[bidx], dtype=np.float32)
                 
-                r = moveP.data[bidx]
-                assert r.is_cuda #this is here because a copy is needed and I want to make sure r is gpu, so cpu() yields a copy
-                r = r.cpu()
-                
-                w = []
+                w = np.zeros(pcount, dtype=np.float32)
                 for pid in range(pcount):
-                    w.append(winP.data[bidx, state.mapPlayerIndexToTurnRel(pid)].item())
+                    mappedIndex = state.mapPlayerIndexToTurnRel(pid)
+                    w[pid] = winTensor[bidx, mappedIndex]
 
                 results.append((r, w))
             else:

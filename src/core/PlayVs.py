@@ -20,7 +20,7 @@ def pickComparativeConfig(config, key):
 if __name__ == '__main__':
     mp.set_start_method("spawn")
     
-    workdir = "/ImbaKeks/nmcts/newDrawOutput"
+    workdir = "/ImbaKeks/nmcts/frameBufferChanges"
     playVersion = None #"B"
     firstMove = 0
     

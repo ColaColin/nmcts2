@@ -265,7 +265,7 @@ class NeuralMctsPlayer():
         self.stateTemplate = stateTemplate.clone()
         self.mctsExpansions = config["learning"]["mctsExpansions"] # a value of 1 here will make it basically play by the network probabilities in a greedy way #TODO test that
         self.learner = learner
-        self.cpuct = 2
+        self.cpuct = 2.75
         self.batchMctsCalls = 0
         self.batchMctsTime = 0
         self.lastBatchMctsBenchmarkTime = time.time()
@@ -286,7 +286,7 @@ class NeuralMctsPlayer():
         psum = 0.0
         possibleMoves = 0
         hasBetterThanXMoves = False
-        x = 0.1
+        x = 0.03
         eps = 0.0000001
         for idx, p in enumerate(moveP):
             if state.isMoveLegal(idx) and p > 0:
@@ -375,7 +375,7 @@ class NeuralMctsPlayer():
     def getNonRelevantEvaluationResult(self, s):
         return (None, s.getTerminalResult())
     
-    def evaluateByLearner(self, states):
+    def evaluateByLearner(self, states, asyncCall=None):
         packed = []
         packIdxMap = {}
         hasInput = False
@@ -388,8 +388,10 @@ class NeuralMctsPlayer():
                 packIdxMap[idx] = pidx
         
         if hasInput:
-            eResults = self.learner.evaluate(packed)
+            eResults = self.learner.evaluate(packed, asyncCall)
         else:
+            if asyncCall is not None:
+                asyncCall()
             eResults = []
         
         finalResults = [None] * len(states)
@@ -422,7 +424,10 @@ class NeuralMctsPlayer():
         
         t = time.time()
         
-        batchedMcts(states, self.mctsExpansions, lambda ws: self.evaluateByLearner(ws), self.cpuct)
+        def evaCall(ws, asyncCall = None):
+            return self.evaluateByLearner(ws, asyncCall)
+        
+        batchedMcts(states, self.mctsExpansions, evaCall, self.cpuct)
         
         self.batchMctsTime += (time.time() - t)
         self.batchMctsCalls += len(states)

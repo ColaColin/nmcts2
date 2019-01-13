@@ -113,8 +113,8 @@ def pickComparativeConfig(config, key):
 if __name__ == '__main__':
     mp.set_start_method("spawn")
     
-    iteration = 42
-    workdir = "/ImbaKeks/nmcts/newDrawOutput"
+    iteration = None
+    workdir = "/ImbaKeks/nmcts/frameBufferChanges"
     playVersion = None #"B"
     firstMove = 0
     
@@ -145,6 +145,6 @@ if __name__ == '__main__':
     
     playFunc = trainer.learner.getPlayFunc()
     
-    playVsCloudict("/ImbaKeks/cloudict/gameEngine", 5, False, playFunc)
+    playVsCloudict("/ImbaKeks/cloudict/gameEngine", 6, True, playFunc)
     
     

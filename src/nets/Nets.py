@@ -28,6 +28,8 @@ class ResBlock(nn.Module):
         out = self.conv2(out)
         out = self.bn2(out)
         
+        
+        
         out += residual
         
         out = self.act(out)
